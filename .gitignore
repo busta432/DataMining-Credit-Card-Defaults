@@ -1,0 +1,12 @@
+# Python environment
+.venv/
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project working documents (not for submission)
+Decisions.md
+PROJECT_TRACKER.md
+CLAUDE.md

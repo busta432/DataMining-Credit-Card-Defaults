@@ -1,0 +1,23 @@
+# Python 3.14 — recreate with:
+#   python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+#
+# The .venv directory itself is NOT committed: it is ~561 MB across 21,510 files,
+# contains platform-specific compiled binaries, and hardcodes absolute paths.
+# This file is what makes the environment reproducible instead.
+
+# --- Notebook runtime ---
+pandas==3.0.5
+numpy==2.5.2
+matplotlib==3.11.1
+scipy==1.18.0
+ucimlrepo==0.0.7
+
+# --- Required to run the notebook as a Jupyter kernel ---
+ipykernel==7.3.0
+
+# --- Phase 2 (PCA and mutual-information analysis); not yet used in Phase 1 ---
+scikit-learn==1.9.0
+
+# --- Only needed to execute the notebook headlessly from the CLI ---
+nbconvert==7.17.1
+nbformat==5.11.1
