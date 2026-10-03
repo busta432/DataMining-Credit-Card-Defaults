@@ -24,3 +24,6 @@ report/_preview.pdf
 
 # Report kept local only
 report/
+
+# Study guide kept local only
+guide/
