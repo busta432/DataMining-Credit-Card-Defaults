@@ -1,0 +1,306 @@
+
+/* ===================================== 31. experiment anatomy (#an-*)
+   Walks the six stages every experiments/expNN_*.py file shares. The prose and
+   the excerpts are authored content, not payload \u2014 but each stage's claim is
+   checkable against the real module listed in its header above. */
+const K = s => '<span class="k">' + s + "</span>";
+const S = s => '<span class="s">' + s + "</span>";
+const N = s => '<span class="n">' + s + "</span>";
+const F = s => '<span class="f">' + s + "</span>";
+const CM = s => '<span class="c">' + s + "</span>";
+
+const ANATOMY = [
+  { t: "1 \u00b7 entry point",
+    file: "experiments/exp06_groups.py",
+    code:
+      K("if") + " __name__ == " + S('"__main__"') + ":\n" +
+      "    " + F("main") + "()\n\n" +
+      CM("# and, at the top of main():") + "\n" +
+      K("def") + " " + F("main") + "():\n" +
+      "    t0 = time." + F("perf_counter") + "()\n" +
+      "    rng_versions = " + F("collect_versions") + "()",
+    note: "Every experiment is importable and runnable: <code>python -m experiments.exp06_groups</code>. " +
+      "Nothing happens at import time, so the module can be imported by the verifier without " +
+      "launching an hour of fitting. The wall clock starts here because <code>runtime_sec</code> " +
+      "is part of the result contract, not an afterthought." },
+
+  { t: "2 \u00b7 require its artifacts",
+    file: "src/runner.py",
+    code:
+      K("def") + " " + F("require_artifact") + "(path, produced_by):\n" +
+      "    " + K("if") + " " + K("not") + " path." + F("exists") + "():\n" +
+      "        " + K("raise") + " " + F("SystemExit") + "(\n" +
+      "            " + S('f"missing {path.name}; run {produced_by} first"') + "\n" +
+      "        )\n" +
+      "    " + K("return") + " path",
+    note: "The parallelism contract. An experiment that cannot find <code>best_params.json</code> " +
+      "<strong>fails loudly and names the script that produces it</strong> rather than quietly " +
+      "re-tuning. Silent recomputation is how seeds drift: two experiments would each tune their " +
+      "own model and their numbers would stop reconciling, with nothing in the output to show it." },
+
+  { t: "3 \u00b7 training context only",
+    file: "src/data.py",
+    code:
+      K("def") + " " + F("training_context") + "():\n" +
+      "    " + S('"""Features, labels and folds for the TRAINING portion only.\n\n' +
+      "    Cannot return test rows: the test indices are not in scope here.\n" +
+      '    """') + "\n" +
+      "    X, y = " + F("feature_matrix") + "(" + F("clean") + "(" + F("load_raw") + "()))\n" +
+      "    sp = " + F("make_splits") + "()\n" +
+      "    tr = sp[" + S('"train_idx"') + "]\n" +
+      "    " + K("return") + " X." + F("iloc") + "[tr], y." + F("iloc") + "[tr], sp[" + S('"folds"') + "]",
+    note: "The leakage firewall, enforced structurally rather than by discipline. Nine of the " +
+      "fourteen experiments call only this function, and it is <em>incapable</em> of handing back " +
+      "a test row. The counterpart, <code>test_context()</code>, exists in exactly five files, " +
+      "and §15.11's check 10 greps for it to prove that." },
+
+  { t: "4 \u00b7 tune, or load the frozen params",
+    file: "experiments/exp06_groups.py",
+    code:
+      params_excerpt(),
+    note: "Feature studies load the frozen hyperparameters instead of re-tuning. That is what " +
+      "makes them a controlled comparison: only the feature matrix differs between arms, so a " +
+      "difference in score is attributable to the features. Arms that change the <em>loss " +
+      "surface</em> \u2014 <code>scale_pos_weight</code>, SMOTE \u2014 do get their own studies, " +
+      "because re-using params tuned on a different objective would confound the comparison." },
+
+  { t: "5 \u00b7 evaluate through the one path",
+    file: "src/runner.py",
+    code:
+      "res = " + F("cv_evaluate") + "(\n" +
+      "    " + F("model_fn") + "=" + K("lambda") + ": " + F("xgb_classifier") + "(**params),\n" +
+      "    X=X[cols], y=y,\n" +
+      "    folds=sp[" + S('"repeated_folds"') + "],   " + CM("# 5 x 5 = 25 fits") + "\n" +
+      "    label=" + S('f"only_{group}"') + ",\n" +
+      ")",
+    note: "Rule 1: there is exactly one evaluation path, and every experiment calls it. " +
+      "Divergent CV loops are the single largest source of irreconcilable numbers in projects " +
+      "this size \u2014 one script shuffles, another does not, and two tables that should agree " +
+      "differ by 0.004 with no way to find out why. <code>cv_evaluate</code> owns fold iteration, " +
+      "the early-stopping slice, and the \u00b1SD computation with <code>ddof=1</code>." },
+
+  { t: "6 \u00b7 freeze and write",
+    file: "src/runner.py",
+    code:
+      K("def") + " " + F("make_row") + "(label, params, n_features, cv, test=" + K("None") + "):\n" +
+      "    " + CM("# every metric present, null when not applicable \u2014 never omitted") + "\n" +
+      "    " + K("return") + " {\n" +
+      "        " + S('"label"') + ": label, " + S('"params"') + ": params,\n" +
+      "        " + S('"n_features"') + ": n_features,\n" +
+      "        " + S('"cv"') + ": cv, " + S('"test"') + ": test,\n" +
+      "    }\n\n" +
+      K("def") + " " + F("save_result") + "(payload):\n" +
+      "    " + K("assert") + " payload[" + S('"notes"') + "], " + S('"notes is mandatory"') + "\n" +
+      "    " + F("validate_schema") + "(payload)",
+    note: "The result contract is enforced at write time, not hoped for at read time. " +
+      "A metric that does not apply is <code>null</code>, never <code>0</code> and never absent " +
+      "\u2014 because a missing key reads as \u201cI forgot\u201d while an explicit null reads as " +
+      "\u201cnot applicable here\u201d. <code>notes</code> is asserted non-empty, which is how " +
+      "every deviation from the plan ended up recorded instead of forgotten." }
+];
+
+/* The tuned-parameter excerpt is built from the real best_params, so the
+   stage-4 panel shows the numbers that were actually frozen. */
+function params_excerpt() {
+  const keys = ["max_depth", "eta", "min_child_weight", "subsample",
+                "colsample_bytree", "gamma", "reg_lambda", "reg_alpha"];
+  let out = "params = " + F("load_best_params") + "(\n" +
+            "    " + F("require_artifact") + "(" + N("BEST_PARAMS_PATH") + ", " +
+            S('"experiments/exp02_tuning.py"') + ")\n" + ")\n\n" +
+            CM("# what that file actually contains:") + "\n{\n";
+  keys.forEach(k => {
+    const v = BP[k];
+    const shown = (typeof v === "number" && !Number.isInteger(v))
+      ? (Math.abs(v) < 0.01 ? v.toExponential(4) : v.toFixed(6))
+      : String(v);
+    out += "    " + S('"' + k + '"') + ": " + N(shown) + ",\n";
+  });
+  out += "    " + S('"n_estimators"') + ": " + N(String(TUN.n_trees)) +
+         ",   " + CM("# chosen by early stopping, not searched") + "\n}";
+  return out;
+}
+
+function buildAnatomy() {
+  const host = $("#an-code");
+  if (!host) return;
+  function draw(i) {
+    const a = ANATOMY[+i] || ANATOMY[0];
+    host.innerHTML =
+      '<div class="codehdr"><span class="fn">' + a.file +
+      '</span><span class="tag">stage ' + (+i + 1) + " of " + ANATOMY.length + "</span></div>" +
+      "<pre><code>" + a.code + "</code></pre>";
+    const note = $("#an-note");
+    if (note) note.innerHTML =
+      '<div class="l">' + a.t + "</div>" +
+      '<div style="font-size:13px;color:var(--ink2);line-height:1.6;margin-top:5px">' +
+      a.note + "</div>";
+  }
+  seg("an-seg", "data-s", draw);
+}
+
+/* ===================================== 32. runtime budget (#rt-*)
+   Where the hours went. The shape is the useful part: tuning and the imbalance
+   arms, which are tuning four more times, dominate everything else combined. */
+const RT_NAME = {
+  exp01: "01 complexity ladder", exp02: "02 Optuna tuning",
+  exp03: "03 class imbalance",   exp04: "04 encoding",
+  exp05: "05 engineered features", exp06: "06 feature groups",
+  exp07: "07 recency",           exp08: "08 learning curve",
+  exp09: "09 calibration",       exp10: "10 cost sensitivity",
+  exp11: "11 SHAP",              exp12: "12 stability",
+  exp13: "13 fairness",          exp14: "14 robustness + final"
+};
+
+function buildRuntime() {
+  const host = $("#rt-chart");
+  if (!host) return;
+  const keys = Object.keys(M.runtimes).sort();
+  const total = RUNTIME_TOTAL;
+
+  function draw(mode) {
+    const rows = keys.map(k => ({
+      label: RT_NAME[k] || k,
+      v: mode === "share" ? M.runtimes[k] / total : M.runtimes[k],
+      raw: M.runtimes[k]
+    })).sort((a, b) => b.v - a.v);
+
+    const svgEl = hbars({
+      rows: rows.map(r => ({
+        label: r.label, v: r.v,
+        colour: r.v / (mode === "share" ? 1 : total) > 0.2 ? C.warn : C.acc,
+        note: mode === "share" ? pct(r.v, 1) : dur(r.raw),
+        tip: r.label + ": " + dur(r.raw) + " (" + pct(r.raw / total, 1) + " of total)"
+      })),
+      w: 760, rowH: 24, padL: 182, padR: 76,
+      fmt: v => mode === "share" ? pct(v, 1) : dur(v)
+    });
+    host.innerHTML = "";
+    host.appendChild(svgEl);
+
+    const top = rows[0], second = rows[1];
+    const note = $("#rt-note");
+    if (note) note.innerHTML =
+      '<div class="l">Total ' + dur(total) + " across " + keys.length + " experiments</div>" +
+      '<div style="font-size:13px;color:var(--ink2);line-height:1.6;margin-top:5px">' +
+      "<strong>" + top.label + "</strong> and <strong>" + second.label + "</strong> together " +
+      "account for " + pct((top.raw + second.raw) / total, 0) + " of the wall clock, and both " +
+      "are hyperparameter search \u2014 the imbalance study runs four independent Optuna studies " +
+      "because reweighting and resampling change the loss surface being searched. Everything " +
+      "else is cheap precisely because it loads <code>best_params.json</code> instead of " +
+      "re-tuning. That is the economic argument for the artifact contract in \u00a71: without " +
+      "caching, each of the nine downstream experiments would carry its own copy of the " +
+      dur(M.runtimes.exp02) + " tuning cost." + "</div>";
+  }
+
+  seg("rt-seg", "data-m", draw);
+  REDRAW.push(() => { const b = $("#rt-seg button.on"); if (b) draw(b.getAttribute("data-m")); });
+}
+
+/* ===================================== 33. library table (#lib-tbl) */
+const LIB_ROLE = {
+  python:      "Interpreter. 3.14 was viable only after confirming numba (a SHAP dependency) had caught up \u2014 the single largest environment risk in the plan.",
+  numpy:       "Arrays, the threshold grid, and every fold-SD computation.",
+  pandas:      "The cleaned frame, the <code>category</code> dtype used by the encoding ablation, and the group definitions.",
+  scipy:       "<code>norm.cdf</code> for the DeLong p-value, Spearman correlations, and the OLS slopes behind the trend features.",
+  sklearn:     "Splits, <code>cross_val_predict</code>, the metrics, <code>CalibratedClassifierCV</code>, and the logistic/tree/forest rungs of the ladder.",
+  xgboost:     "The estimator under investigation. 3.4.1 defaults <code>enable_categorical=True</code>, which is why <code>XGB_FIXED</code> pins it <code>False</code>.",
+  optuna:      "TPE sampler, MedianPruner, and the persisted study that makes the search resumable and its history plottable.",
+  shap:        "TreeSHAP. 0.52.0 reads the constructor's <code>enable_categorical</code> flag and refuses interventional perturbation if it is set \u2014 the incompatibility documented in \u00a715.3.",
+  imblearn:    "SMOTE, used once, inside the fold, to produce the evidence row that justifies rejecting it.",
+  matplotlib:  "The Phase 1 house style, carried forward unchanged so Phase 2 figures sit beside Phase 1 figures without reformatting.",
+  statsmodels: "VIF, for the Phase 1 collinearity numbers the SHAP caveat cites."
+};
+function buildLibTable() {
+  const v = M.versions;
+  const keys = VER_ORDER.filter(k => v[k] !== undefined)
+    .concat(Object.keys(v).filter(k => VER_ORDER.indexOf(k) < 0));
+  fillTable("lib-tbl", keys.map(k => ({ c: k, v: v[k], r: LIB_ROLE[k] || "" })), [
+    { k: "c", fmt: x => "<code>" + x + "</code>" },
+    { k: "v", cls: "num", fmt: x => x === null || x === undefined ? "\u2014" : String(x) },
+    { k: "r", fmt: x => '<span class="small">' + x + "</span>" }
+  ]);
+}
+
+/* ====================================================================== boot
+   Order matters in exactly one place: injectScalars() must run before any
+   builder that measures layout, and buildNav() must run before wireScroll()
+   reads the nav links. Everything else is independent, and each builder is
+   wrapped so that one failure cannot blank the rest of the page. */
+function run(name, fn) {
+  try { fn(); }
+  catch (e) { console.error("guide: " + name + " failed", e); }
+}
+
+function boot() {
+  run("injectScalars", injectScalars);
+  run("buildNav", buildNav);
+  run("buildToc", buildToc);
+
+  /* 1 orientation */
+  run("depmap", buildDepmap);
+  /* 2 data */
+  run("payProfile", buildPayProfile);
+  /* 3 theory */
+  run("splitGain", buildSplitGain);
+  /* 4 metrics */
+  run("threshold", buildThreshold);
+  run("ladderMini", buildLadderMini);
+  /* 5 protocol */
+  run("cvDiagram", buildCvDiagram);
+  run("leakQuiz", buildLeakQuiz);
+  /* 6 ladder */
+  run("ladderTable", buildLadderTable);
+  run("ladderChart", buildLadderChart);
+  /* 7 tuning */
+  run("spaceTable", buildSpaceTable);
+  run("tuningSurface", buildTuningSurface);
+  /* 8 imbalance */
+  run("imbalanceTable", buildImbalanceTable);
+  /* 9 calibration and cost */
+  run("reliability", buildReliability);
+  run("elkan", buildElkan);
+  /* 10 feature studies */
+  run("encodingTable", buildEncodingTable);
+  run("engineeredTable", buildEngineeredTable);
+  run("groupAblation", buildGroupAblation);
+  run("recency", buildRecency);
+  run("learningCurve", buildLearningCurve);
+  /* 11 SHAP */
+  run("shapTable", buildShapTable);
+  run("shapPay0", buildShapPay0);
+  /* 12 stability */
+  run("stability", buildStability);
+  run("agreement", buildAgreement);
+  /* 13 fairness */
+  run("fairness", buildFairness);
+  run("fairGapTable", buildFairGapTable);
+  /* 14 robustness and final */
+  run("finalTable", buildFinalTable);
+  run("finalConfusion", buildFinalConfusion);
+  run("seedVariance", buildSeedVariance);
+  run("delongTable", buildDelongTable);
+  run("versionTable", buildVersionTable);
+  /* 15 implementation */
+  run("anatomy", buildAnatomy);
+  run("runtime", buildRuntime);
+  run("libTable", buildLibTable);
+
+  /* Chrome last: wireScroll measures offsets, so it must run after every
+     builder has inserted its content and the document has its final height. */
+  run("wireFilter", wireFilter);
+  run("wireTheme", wireTheme);
+  run("wireExpandAll", wireExpandAll);
+  run("wireScroll", wireScroll);
+
+  /* Deep links land on the right section with the sidebar already in sync. */
+  if (location.hash) {
+    const t = document.getElementById(location.hash.slice(1));
+    if (t) requestAnimationFrame(() => t.scrollIntoView());
+  }
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+else boot();
+</script>
+</body>
+</html>

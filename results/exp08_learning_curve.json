@@ -1,0 +1,182 @@
+{
+  "experiment_id": "exp08_learning_curve",
+  "title": "Learning curve against training-set size",
+  "run_utc": "2026-09-30T09:17:44Z",
+  "seed": 42,
+  "versions": {
+    "python": "3.14.3",
+    "numpy": "2.5.3",
+    "sklearn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.52.0",
+    "optuna": "5.0.0",
+    "imblearn": "0.14.2",
+    "pandas": "3.0.6"
+  },
+  "runtime_sec": 120.7,
+  "config": {
+    "fractions": [
+      0.1,
+      0.25,
+      0.5,
+      0.75,
+      1.0
+    ],
+    "seeds": [
+      42,
+      43,
+      44,
+      45,
+      46
+    ],
+    "fits_per_fraction": 25
+  },
+  "rows": [
+    {
+      "label": "frac_0.10",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7633122921013786,
+        "roc_auc_sd": 0.008545665052988304,
+        "pr_auc_mean": null,
+        "pr_auc_sd": null,
+        "brier_mean": null,
+        "brier_sd": null,
+        "n_fits": 25
+      },
+      "test": null,
+      "fraction": 0.1,
+      "n_train_rows_mean": 1916.0,
+      "train_roc_auc_mean": 0.8042731675856138,
+      "train_roc_auc_sd": 0.021202136005183028,
+      "gap_train_minus_val": 0.040960875484235215
+    },
+    {
+      "label": "frac_0.25",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7735986781841393,
+        "roc_auc_sd": 0.005996570079669973,
+        "pr_auc_mean": null,
+        "pr_auc_sd": null,
+        "brier_mean": null,
+        "brier_sd": null,
+        "n_fits": 25
+      },
+      "test": null,
+      "fraction": 0.25,
+      "n_train_rows_mean": 4791.0,
+      "train_roc_auc_mean": 0.8065637060085662,
+      "train_roc_auc_sd": 0.01694124285539022,
+      "gap_train_minus_val": 0.032965027824426896
+    },
+    {
+      "label": "frac_0.50",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7784111433944859,
+        "roc_auc_sd": 0.007000056146849962,
+        "pr_auc_mean": null,
+        "pr_auc_sd": null,
+        "brier_mean": null,
+        "brier_sd": null,
+        "n_fits": 25
+      },
+      "test": null,
+      "fraction": 0.5,
+      "n_train_rows_mean": 9582.0,
+      "train_roc_auc_mean": 0.8132779005817738,
+      "train_roc_auc_sd": 0.021368775817881006,
+      "gap_train_minus_val": 0.03486675718728793
+    },
+    {
+      "label": "frac_0.75",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7824250676125224,
+        "roc_auc_sd": 0.004891675782540522,
+        "pr_auc_mean": null,
+        "pr_auc_sd": null,
+        "brier_mean": null,
+        "brier_sd": null,
+        "n_fits": 25
+      },
+      "test": null,
+      "fraction": 0.75,
+      "n_train_rows_mean": 14373.0,
+      "train_roc_auc_mean": 0.8178128312555382,
+      "train_roc_auc_sd": 0.015869821702683782,
+      "gap_train_minus_val": 0.03538776364301577
+    },
+    {
+      "label": "frac_1.00",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7835230991584552,
+        "roc_auc_sd": 0.005947356707170543,
+        "pr_auc_mean": null,
+        "pr_auc_sd": null,
+        "brier_mean": null,
+        "brier_sd": null,
+        "n_fits": 25
+      },
+      "test": null,
+      "fraction": 1.0,
+      "n_train_rows_mean": 19164.0,
+      "train_roc_auc_mean": 0.8156891169704095,
+      "train_roc_auc_sd": 0.012533897407846224,
+      "gap_train_minus_val": 0.03216601781195427
+    }
+  ],
+  "notes": "Validation ROC-AUC rises from 0.76331 at 10% of the training data to 0.78352 at 100%. Half the data already reaches 0.77841, and the final step from 75% to 100% adds +0.00110 against a fold-SD of 0.00595. The curve has therefore flattened: more rows of the same six-month billing snapshot would not materially help. The train-validation gap at full data is +0.03217, so the plateau is a feature-set ceiling rather than a high-variance overfit that more data would close. Together with the small tuned-versus-untuned gap from exp02, this is the evidence behind the WP18 argument that performance is limited by what a billing snapshot can observe -- it cannot see job loss, illness or income shocks -- not by model capacity."
+}

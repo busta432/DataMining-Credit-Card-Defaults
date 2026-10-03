@@ -1,0 +1,218 @@
+
+/* ================================================================== chart kit
+   A deliberately small plotting layer. Everything is drawn into a fixed user
+   space and scaled by viewBox, so there is no resize handling and no canvas.
+   Colours are referenced as CSS custom properties through inline `style`
+   (presentation attributes do not accept var()), which is what lets the whole
+   page switch theme without redrawing geometry. */
+
+const REDRAW = [];                       /* builders that must re-run on theme change */
+function redrawAll() { REDRAW.forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
+
+const C = {
+  acc:  "var(--acc)",  acc2: "var(--acc2)", good: "var(--good)",
+  bad:  "var(--bad)",  warn: "var(--warn)", ink: "var(--ink)",
+  ink2: "var(--ink2)", ink3: "var(--ink3)", bd: "var(--bd)",
+  bd2:  "var(--bd2)",  bg2: "var(--bg2)",  bg3: "var(--bg3)"
+};
+/* Categorical ramp for ablation arms and subgroups. */
+const CAT = [C.acc, C.acc2, C.good, C.warn, C.bad, C.ink3];
+
+/* nice(lo, hi, n) -> rounded domain plus tick positions, so an axis never ends
+   on 0.7834999 and the gridlines land on readable values. */
+function nice(lo, hi, n) {
+  n = n || 5;
+  if (hi === lo) { hi = lo + 1; }
+  const raw = (hi - lo) / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag;
+  const a = Math.floor(lo / step) * step, b = Math.ceil(hi / step) * step;
+  const ticks = [];
+  for (let v = a; v <= b + step / 2; v += step) ticks.push(Math.round(v / step) * step);
+  return { lo: a, hi: b, step: step, ticks: ticks };
+}
+
+/* A linear plot frame. Returns scale functions plus the <g> to draw marks into,
+   which keeps mark code free of axis arithmetic. */
+function frame(opt) {
+  const w = opt.w || 760, h = opt.h || 300;
+  const p = Object.assign({ l: 54, r: 14, t: 14, b: 34 }, opt.pad || {});
+  const s = svg(w, h, opt.cls);
+  const ix = [p.l, w - p.r], iy = [h - p.b, p.t];
+  const xd = opt.xdom, yd = opt.ydom;
+  const x = v => ix[0] + (v - xd[0]) / (xd[1] - xd[0]) * (ix[1] - ix[0]);
+  const y = v => iy[0] + (v - yd[0]) / (yd[1] - yd[0]) * (iy[1] - iy[0]);
+
+  /* Horizontal gridlines first, so marks sit on top of them. */
+  (opt.yticks || []).forEach(t => {
+    const yy = y(t);
+    s.appendChild(el("line", { class: "grid", x1: ix[0], x2: ix[1], y1: yy, y2: yy }));
+    s.appendChild(el("text", {
+      x: ix[0] - 8, y: yy + 3.5, "text-anchor": "end",
+      style: "fill:var(--ink3);font-size:10.5px;font-family:var(--mono)"
+    }, (opt.yfmt || String)(t)));
+  });
+  (opt.xticks || []).forEach(t => {
+    const xx = x(t.v === undefined ? t : t.v);
+    if (opt.xgrid) s.appendChild(el("line", { class: "grid", y1: iy[1], y2: iy[0], x1: xx, x2: xx }));
+    s.appendChild(el("text", {
+      x: xx, y: h - p.b + 16, "text-anchor": "middle",
+      style: "fill:var(--ink3);font-size:10.5px;font-family:var(--mono)"
+    }, t.label === undefined ? String(t) : t.label));
+  });
+  s.appendChild(el("line", { class: "axis", x1: ix[0], x2: ix[1], y1: iy[0], y2: iy[0] }));
+  s.appendChild(el("line", { class: "axis", x1: ix[0], x2: ix[0], y1: iy[0], y2: iy[1] }));
+
+  if (opt.ylabel) s.appendChild(el("text", {
+    x: 12, y: (iy[0] + iy[1]) / 2, "text-anchor": "middle",
+    transform: "rotate(-90 12 " + ((iy[0] + iy[1]) / 2) + ")",
+    style: "fill:var(--ink3);font-size:11px"
+  }, opt.ylabel));
+  if (opt.xlabel) s.appendChild(el("text", {
+    x: (ix[0] + ix[1]) / 2, y: h - 2, "text-anchor": "middle",
+    style: "fill:var(--ink3);font-size:11px"
+  }, opt.xlabel));
+
+  const g = el("g");
+  s.appendChild(g);
+  return { svg: s, g: g, x: x, y: y, ix: ix, iy: iy, w: w, h: h, pad: p };
+}
+
+/* Polyline through [[x,y],...] in data space. */
+function line(fr, pts, colour, width, dash) {
+  const d = pts.map((p, i) => (i ? "L" : "M") + fr.x(p[0]).toFixed(2) + " " + fr.y(p[1]).toFixed(2)).join(" ");
+  const st = "fill:none;stroke:" + colour + ";stroke-width:" + (width || 2) +
+             ";stroke-linejoin:round;stroke-linecap:round" + (dash ? ";stroke-dasharray:" + dash : "");
+  fr.g.appendChild(el("path", { d: d, style: st }));
+}
+function dot(fr, px, py, colour, r, tip) {
+  const c = el("circle", { cx: fr.x(px), cy: fr.y(py), r: r || 3.2,
+                           style: "fill:" + colour + ";stroke:var(--bg2);stroke-width:1" });
+  if (tip) c.appendChild(el("title", {}, tip));
+  fr.g.appendChild(c);
+}
+/* Shaded band between two series: used for +/- SD envelopes. */
+function band(fr, pts, colour) {
+  const up = pts.map((p, i) => (i ? "L" : "M") + fr.x(p[0]).toFixed(2) + " " + fr.y(p[1]).toFixed(2));
+  const dn = pts.slice().reverse().map(p => "L" + fr.x(p[0]).toFixed(2) + " " + fr.y(p[2]).toFixed(2));
+  fr.g.appendChild(el("path", { d: up.concat(dn).join(" ") + " Z",
+    style: "fill:" + colour + ";opacity:.16;stroke:none" }));
+}
+/* Vertical error bar, in data space. */
+function ebar(fr, px, lo, hi, colour) {
+  const xx = fr.x(px), st = "stroke:" + colour + ";stroke-width:1.4";
+  fr.g.appendChild(el("line", { x1: xx, x2: xx, y1: fr.y(lo), y2: fr.y(hi), style: st }));
+  [lo, hi].forEach(v => fr.g.appendChild(el("line", {
+    x1: xx - 3.5, x2: xx + 3.5, y1: fr.y(v), y2: fr.y(v), style: st })));
+}
+function hline(fr, v, colour, dash, label) {
+  const yy = fr.y(v);
+  fr.g.appendChild(el("line", { x1: fr.ix[0], x2: fr.ix[1], y1: yy, y2: yy,
+    style: "stroke:" + colour + ";stroke-width:1.3;stroke-dasharray:" + (dash || "4 3") }));
+  if (label) fr.g.appendChild(el("text", { x: fr.ix[1] - 3, y: yy - 5, "text-anchor": "end",
+    style: "fill:" + colour + ";font-size:10.5px;font-family:var(--mono)" }, label));
+}
+function vline(fr, v, colour, dash, label) {
+  const xx = fr.x(v);
+  fr.g.appendChild(el("line", { x1: xx, x2: xx, y1: fr.iy[0], y2: fr.iy[1],
+    style: "stroke:" + colour + ";stroke-width:1.3;stroke-dasharray:" + (dash || "4 3") }));
+  if (label) fr.g.appendChild(el("text", { x: xx + 4, y: fr.iy[1] + 11,
+    style: "fill:" + colour + ";font-size:10.5px;font-family:var(--mono)" }, label));
+}
+/* In-plot legend. items = [{c, t}] */
+function legend(fr, items, ax, ay) {
+  const g = el("g", { transform: "translate(" + ax + "," + ay + ")" });
+  let off = 0;
+  items.forEach(it => {
+    g.appendChild(el("rect", { x: off, y: -7, width: 10, height: 10, rx: 2,
+                               style: "fill:" + it.c }));
+    const t = el("text", { x: off + 14, y: 2, style: "fill:var(--ink2);font-size:11px" }, it.t);
+    g.appendChild(t);
+    off += 14 + it.t.length * 6.0 + 16;
+  });
+  fr.svg.appendChild(g);
+}
+
+/* Horizontal bar chart for ranked quantities (feature importance, ablations).
+   rows = [{label, v, colour, tip, note}] */
+function hbars(opt) {
+  const rows = opt.rows, n = rows.length;
+  const rowH = opt.rowH || 20, padL = opt.padL || 150, padR = opt.padR || 54;
+  const w = opt.w || 760, h = n * rowH + 26;
+  const s = svg(w, h);
+  const lo = opt.lo === undefined ? 0 : opt.lo;
+  const hi = opt.hi === undefined ? Math.max.apply(null, rows.map(r => r.v)) : opt.hi;
+  const x = v => padL + (v - lo) / ((hi - lo) || 1) * (w - padL - padR);
+  const base = x(Math.max(lo, Math.min(hi, 0)));
+
+  rows.forEach((r, i) => {
+    const yy = i * rowH + 10;
+    const xv = x(r.v);
+    const bar = el("rect", {
+      x: Math.min(base, xv), y: yy, width: Math.max(1.5, Math.abs(xv - base)),
+      height: rowH - 7, rx: 2, style: "fill:" + (r.colour || C.acc) + ";opacity:" + (r.dim ? .4 : .88)
+    });
+    if (r.tip) bar.appendChild(el("title", {}, r.tip));
+    s.appendChild(bar);
+    s.appendChild(el("text", { x: padL - 9, y: yy + rowH / 2 + 1.5, "text-anchor": "end",
+      style: "fill:var(--ink2);font-size:11.3px;font-family:var(--mono)" }, r.label));
+    s.appendChild(el("text", { x: Math.max(base, xv) + 7, y: yy + rowH / 2 + 1.5,
+      style: "fill:var(--ink3);font-size:10.8px;font-family:var(--mono)" },
+      r.note === undefined ? (opt.fmt || f4)(r.v) : r.note));
+  });
+  s.appendChild(el("line", { class: "axis", x1: base, x2: base, y1: 6, y2: h - 14 }));
+  return s;
+}
+
+/* Table renderer. cols = [{h, k, cls, fmt}] -> fills an existing <tbody>. */
+function fillTable(id, rows, cols) {
+  const tb = $("#" + id);
+  if (!tb) return;
+  tb.innerHTML = rows.map(r => {
+    const cls = r.__cls ? ' class="' + r.__cls + '"' : "";
+    return "<tr" + cls + ">" + cols.map(c => {
+      const raw = typeof c.k === "function" ? c.k(r) : r[c.k];
+      const txt = c.fmt ? c.fmt(raw, r) : (raw === null || raw === undefined ? "\u2014" : String(raw));
+      const cc = typeof c.cls === "function" ? c.cls(raw, r) : c.cls;
+      return "<td" + (cc ? ' class="' + cc + '"' : "") + ">" + txt + "</td>";
+    }).join("") + "</tr>";
+  }).join("");
+}
+
+/* Matrix heatmap for the rank-agreement and pairwise-stability grids.
+   m[i][j] in [lo,hi]; low = bad = red, high = good = green. */
+function heat(opt) {
+  const labs = opt.labels, n = labs.length;
+  const cell = opt.cell || 58, padL = opt.padL || 104, padT = opt.padT || 26;
+  const w = padL + n * cell + 8, h = padT + n * cell + 8;
+  const s = svg(w, h);
+  const lo = opt.lo === undefined ? 0 : opt.lo, hi = opt.hi === undefined ? 1 : opt.hi;
+
+  labs.forEach((l, j) => s.appendChild(el("text", {
+    x: padL + j * cell + cell / 2, y: padT - 9, "text-anchor": "middle",
+    style: "fill:var(--ink3);font-size:10.5px;font-family:var(--mono)" }, l)));
+  labs.forEach((l, i) => s.appendChild(el("text", {
+    x: padL - 9, y: padT + i * cell + cell / 2 + 3.5, "text-anchor": "end",
+    style: "fill:var(--ink2);font-size:10.5px;font-family:var(--mono)" }, l)));
+
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const v = opt.m[i][j];
+    const t = v === null || v === undefined ? null : Math.max(0, Math.min(1, (v - lo) / ((hi - lo) || 1)));
+    const fillS = t === null
+      ? "fill:var(--bg3)"
+      : "fill:color-mix(in srgb,var(--good) " + (t * 78 + 6).toFixed(0) + "%, var(--bad))" +
+        ";opacity:" + (0.22 + 0.5 * t).toFixed(2);
+    const cellG = el("g");
+    cellG.appendChild(el("rect", { x: padL + j * cell + 1.5, y: padT + i * cell + 1.5,
+      width: cell - 3, height: cell - 3, rx: 4,
+      style: fillS + ";stroke:var(--bd)" }));
+    cellG.appendChild(el("text", { x: padL + j * cell + cell / 2,
+      y: padT + i * cell + cell / 2 + 4, "text-anchor": "middle",
+      style: "fill:var(--ink);font-size:11.5px;font-family:var(--mono)" },
+      t === null ? "\u2014" : (opt.fmt || f2)(v)));
+    if (opt.tip) cellG.appendChild(el("title", {}, opt.tip(i, j, v)));
+    s.appendChild(cellG);
+  }
+  return s;
+}

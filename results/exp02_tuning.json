@@ -1,0 +1,120 @@
+{
+  "experiment_id": "exp02_tuning",
+  "title": "Hyperparameter search (Optuna TPE)",
+  "run_utc": "2026-09-30T08:58:21Z",
+  "seed": 42,
+  "versions": {
+    "python": "3.14.3",
+    "numpy": "2.5.3",
+    "sklearn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.52.0",
+    "optuna": "5.0.0",
+    "imblearn": "0.14.2",
+    "pandas": "3.0.6"
+  },
+  "runtime_sec": 1166.3,
+  "config": {
+    "n_trials": 150,
+    "objective": "roc_auc",
+    "search_space": {
+      "max_depth": [
+        "int",
+        3,
+        8,
+        false
+      ],
+      "eta": [
+        "float",
+        0.01,
+        0.3,
+        true
+      ],
+      "min_child_weight": [
+        "float",
+        1.0,
+        20.0,
+        true
+      ],
+      "subsample": [
+        "float",
+        0.6,
+        1.0,
+        false
+      ],
+      "colsample_bytree": [
+        "float",
+        0.5,
+        1.0,
+        false
+      ],
+      "gamma": [
+        "float",
+        0.0,
+        5.0,
+        false
+      ],
+      "reg_lambda": [
+        "float",
+        0.01,
+        100.0,
+        true
+      ],
+      "reg_alpha": [
+        "float",
+        0.001,
+        10.0,
+        true
+      ]
+    },
+    "tuning_gain_roc_auc": 0.02264501389085183,
+    "pooled_fold_sd": 0.010673603053594327,
+    "n_complete": 142,
+    "n_pruned": 8
+  },
+  "rows": [
+    {
+      "label": "tuned",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7845418198217665,
+        "roc_auc_sd": 0.00711929880687044,
+        "pr_auc_mean": 0.5602203741928651,
+        "pr_auc_sd": 0.014612254574967478,
+        "brier_mean": 0.1347932654619217,
+        "brier_sd": 0.004135158657298805,
+        "n_fits": 25
+      },
+      "test": null,
+      "n_trees": 449,
+      "best_iteration_mean": 400.4
+    },
+    {
+      "label": "library_defaults",
+      "params": {},
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7618968059309147,
+        "roc_auc_sd": 0.007952445324816216,
+        "pr_auc_mean": 0.529260213502097,
+        "pr_auc_sd": 0.011308077944549938,
+        "brier_mean": 0.1414695507287979,
+        "brier_sd": 0.002573476736049442,
+        "n_fits": 25
+      },
+      "test": null,
+      "n_trees": 100
+    }
+  ],
+  "notes": "Optuna TPE, 142 complete and 8 pruned trials, MedianPruner. Trial budget raised from the planned 60-80 to 150: measured cost was ~2.3 s per trial rather than the estimated 15-30 s, so a wider search was free. Tuning gain over library defaults on the 25 repeated-CV fits: +0.02265 ROC-AUC against a pooled fold-SD of 0.01067 (larger than one pooled SD). scale_pos_weight was excluded from the search space by design: ROC-AUC is invariant to monotone score transformations, so the tuner cannot see it. Early stopping used an inner 15% slice of each training fold, never the validation fold and never the test set."
+}

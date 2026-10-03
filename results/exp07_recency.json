@@ -1,0 +1,333 @@
+{
+  "experiment_id": "exp07_recency",
+  "title": "Recency ablation: months of history required",
+  "run_utc": "2026-09-30T09:15:40Z",
+  "seed": 42,
+  "versions": {
+    "python": "3.14.3",
+    "numpy": "2.5.3",
+    "sklearn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.52.0",
+    "optuna": "5.0.0",
+    "imblearn": "0.14.2",
+    "pandas": "3.0.6"
+  },
+  "runtime_sec": 235.8,
+  "config": {
+    "chronological_order": [
+      "PAY_6",
+      "PAY_5",
+      "PAY_4",
+      "PAY_3",
+      "PAY_2",
+      "PAY_0"
+    ],
+    "static_features": [
+      "LIMIT_BAL",
+      "SEX",
+      "EDUCATION",
+      "MARRIAGE",
+      "AGE"
+    ],
+    "smallest_k_within_one_sd": 3,
+    "marginal_gain_per_month": {
+      "2": 0.007319737716542596,
+      "3": 0.004391180608681711,
+      "4": 0.004119652757536563,
+      "5": 0.0013900330406916295,
+      "6": -0.0008159806349337106
+    }
+  },
+  "rows": [
+    {
+      "label": "k1_months",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 8,
+      "cv": {
+        "roc_auc_mean": 0.7669355320921634,
+        "roc_auc_sd": 0.008415478292968931,
+        "pr_auc_mean": 0.5330794957395286,
+        "pr_auc_sd": 0.0164305501242867,
+        "brier_mean": 0.14454954266548156,
+        "brier_sd": 0.01189752653605405,
+        "n_fits": 25
+      },
+      "test": null,
+      "k_months": 1,
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_0",
+        "BILL_AMT1",
+        "PAY_AMT1"
+      ],
+      "months": [
+        "PAY_0"
+      ]
+    },
+    {
+      "label": "k2_months",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 11,
+      "cv": {
+        "roc_auc_mean": 0.774255269808706,
+        "roc_auc_sd": 0.008330601173319765,
+        "pr_auc_mean": 0.5427655225940332,
+        "pr_auc_sd": 0.016859531286796327,
+        "brier_mean": 0.14012202858924866,
+        "brier_sd": 0.010954497305150333,
+        "n_fits": 25
+      },
+      "test": null,
+      "k_months": 2,
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_2",
+        "PAY_0",
+        "BILL_AMT2",
+        "BILL_AMT1",
+        "PAY_AMT2",
+        "PAY_AMT1"
+      ],
+      "months": [
+        "PAY_2",
+        "PAY_0"
+      ]
+    },
+    {
+      "label": "k3_months",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 14,
+      "cv": {
+        "roc_auc_mean": 0.7786464504173877,
+        "roc_auc_sd": 0.0076881169438048095,
+        "pr_auc_mean": 0.5474399492821093,
+        "pr_auc_sd": 0.014958361565609273,
+        "brier_mean": 0.1439746832847595,
+        "brier_sd": 0.013393699907837791,
+        "n_fits": 25
+      },
+      "test": null,
+      "k_months": 3,
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_3",
+        "PAY_2",
+        "PAY_0",
+        "BILL_AMT3",
+        "BILL_AMT2",
+        "BILL_AMT1",
+        "PAY_AMT3",
+        "PAY_AMT2",
+        "PAY_AMT1"
+      ],
+      "months": [
+        "PAY_3",
+        "PAY_2",
+        "PAY_0"
+      ]
+    },
+    {
+      "label": "k4_months",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 17,
+      "cv": {
+        "roc_auc_mean": 0.7827661031749242,
+        "roc_auc_sd": 0.008095952902335118,
+        "pr_auc_mean": 0.5558133885272664,
+        "pr_auc_sd": 0.01864470375685615,
+        "brier_mean": 0.13775595247745515,
+        "brier_sd": 0.008620886964907632,
+        "n_fits": 25
+      },
+      "test": null,
+      "k_months": 4,
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_4",
+        "PAY_3",
+        "PAY_2",
+        "PAY_0",
+        "BILL_AMT4",
+        "BILL_AMT3",
+        "BILL_AMT2",
+        "BILL_AMT1",
+        "PAY_AMT4",
+        "PAY_AMT3",
+        "PAY_AMT2",
+        "PAY_AMT1"
+      ],
+      "months": [
+        "PAY_4",
+        "PAY_3",
+        "PAY_2",
+        "PAY_0"
+      ]
+    },
+    {
+      "label": "k5_months",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 20,
+      "cv": {
+        "roc_auc_mean": 0.7841561362156159,
+        "roc_auc_sd": 0.007682449413279462,
+        "pr_auc_mean": 0.5589016610718062,
+        "pr_auc_sd": 0.013913741993377231,
+        "brier_mean": 0.13558413922786713,
+        "brier_sd": 0.006393544403237369,
+        "n_fits": 25
+      },
+      "test": null,
+      "k_months": 5,
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_5",
+        "PAY_4",
+        "PAY_3",
+        "PAY_2",
+        "PAY_0",
+        "BILL_AMT5",
+        "BILL_AMT4",
+        "BILL_AMT3",
+        "BILL_AMT2",
+        "BILL_AMT1",
+        "PAY_AMT5",
+        "PAY_AMT4",
+        "PAY_AMT3",
+        "PAY_AMT2",
+        "PAY_AMT1"
+      ],
+      "months": [
+        "PAY_5",
+        "PAY_4",
+        "PAY_3",
+        "PAY_2",
+        "PAY_0"
+      ]
+    },
+    {
+      "label": "k6_months",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7833401555806822,
+        "roc_auc_sd": 0.0068885237910197615,
+        "pr_auc_mean": 0.557021589055488,
+        "pr_auc_sd": 0.012639513858747483,
+        "brier_mean": 0.13840949058532714,
+        "brier_sd": 0.009050880956217658,
+        "n_fits": 25
+      },
+      "test": null,
+      "k_months": 6,
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_6",
+        "PAY_5",
+        "PAY_4",
+        "PAY_3",
+        "PAY_2",
+        "PAY_0",
+        "BILL_AMT6",
+        "BILL_AMT5",
+        "BILL_AMT4",
+        "BILL_AMT3",
+        "BILL_AMT2",
+        "BILL_AMT1",
+        "PAY_AMT6",
+        "PAY_AMT5",
+        "PAY_AMT4",
+        "PAY_AMT3",
+        "PAY_AMT2",
+        "PAY_AMT1"
+      ],
+      "months": [
+        "PAY_6",
+        "PAY_5",
+        "PAY_4",
+        "PAY_3",
+        "PAY_2",
+        "PAY_0"
+      ]
+    }
+  ],
+  "notes": "One month of history (September only) already reaches ROC-AUC 0.76694, against 0.78334 for all six months -- a total gain of +0.01640 from five extra months, against a fold-SD of 0.00689. k=3 is the smallest history window that lands within one fold-SD of the full six months, so most of the collectable signal is in the most recent statement. This is the recency gradient of Phase 1 (Spearman rho rising from 0.143 at April to 0.292 at September) restated as a data-collection cost. Marginal gain per additional month: k2: +0.00732, k3: +0.00439, k4: +0.00412, k5: +0.00139, k6: -0.00082. Practical reading for a lender: the fifth and sixth months of history are close to free of predictive value here, which matters because history depth is an acquisition cost and a privacy exposure, not just a modelling choice."
+}

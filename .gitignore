@@ -1,7 +1,12 @@
 # Python environment
 .venv/
+.venv*/
 __pycache__/
 *.py[cod]
+
+# Phase 2 cached artifacts: large, and regenerable from experiments/.
+# results/ is deliberately NOT ignored — the report cites it.
+artifacts/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -10,3 +15,9 @@ __pycache__/
 Decisions.md
 PROJECT_TRACKER.md
 CLAUDE.md
+# Report build scratch: PDF previews used only to verify pagination.
+report/_body.pdf
+report/_preview.pdf
+
+# Office lock files
+~$*

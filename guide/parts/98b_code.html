@@ -1,0 +1,318 @@
+<h3>15.7 <code>costs.py</code> and <code>metrics.py</code> — decisions and evidence</h3>
+
+<p>These two are separated on purpose, and the boundary is meaningful rather than cosmetic:
+<code>costs.py</code> <em>chooses</em> things, <code>metrics.py</code> <em>measures</em> things. A
+function that does both is a function that can tune a threshold against the data it is scoring, which
+is §5.5's fatal flaw.</p>
+
+<div class="codehdr"><span class="fn">src/costs.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">elkan_p_star</span>(r):
+    <span class="s">"""Elkan (2001) cost-optimal decision threshold for a calibrated classifier.
+
+    Acting is optimal when p * C_FN &gt; (1 - p) * C_FP, i.e. p &gt; 1 / (1 + r).
+    """</span>
+    <span class="k">return</span> <span class="n">1.0</span> / (<span class="n">1.0</span> + r)
+
+<span class="k">def</span> <span class="f">threshold_grid</span>(n=<span class="n">THRESHOLD_GRID_N</span>):
+    <span class="c"># Open interval: tau=0 predicts everyone default, tau=1 nobody. Neither is a decision.</span>
+    <span class="k">return</span> np.<span class="f">linspace</span>(<span class="n">1e-4</span>, <span class="n">1</span> - <span class="n">1e-4</span>, n)
+
+<span class="k">def</span> <span class="f">pick_threshold_oof</span>(y_oof, proba_oof, r=<span class="n">R_HEADLINE</span>, ead=<span class="k">None</span>, grid=<span class="k">None</span>):
+    <span class="s">"""Choose the cost-minimising threshold on out-of-fold training predictions.
+
+    The returned scalar is frozen and applied unchanged to the test set. Sweeping the
+    threshold against test labels is the single most common fatal flaw in this task.
+    """</span>
+    grid = <span class="f">threshold_grid</span>() <span class="k">if</span> grid <span class="k">is</span> <span class="k">None</span> <span class="k">else</span> np.<span class="f">asarray</span>(grid, dtype=<span class="f">float</span>)
+    costs = np.<span class="f">array</span>([<span class="f">cost_at_threshold</span>(y_oof, proba_oof, t, r=r, ead=ead) <span class="k">for</span> t <span class="k">in</span> grid])
+    tau = <span class="f">float</span>(grid[<span class="f">int</span>(np.<span class="f">argmin</span>(costs))])
+    <span class="k">return</span> tau, {<span class="s">"grid"</span>: grid.<span class="f">tolist</span>(), <span class="s">"cost"</span>: costs.<span class="f">tolist</span>(),
+                 <span class="s">"min_cost"</span>: <span class="f">float</span>(costs.<span class="f">min</span>()), <span class="s">"tau"</span>: tau}
+</code></pre>
+
+<p>Three details carry weight.</p>
+
+<p><strong>The grid is open, not closed.</strong> <code>np.linspace(1e-4, 1-1e-4, 501)</code> rather
+than <code>np.linspace(0, 1, 501)</code>. At τ = 0 everybody is flagged as a default, so FN = 0 and
+the cost is just the count of negatives; at τ = 1 nobody is flagged, so FP = 0 and the cost is
+r × positives. Both are finite numbers that <code>argmin</code> will happily return if the cost
+ratio is extreme enough, and both are degenerate — "approve nobody" is not a credit policy. Excluding
+the endpoints means the returned τ is always a genuine decision rule, and it is why
+<code>verify.py</code> can assert <code>0 &lt; τ &lt; 1</code> as a hard invariant.</p>
+
+<p><strong>The function returns a tuple, and the first element is a scalar.</strong>
+<code>float(grid[argmin])</code> — not an array, not a function of the data, not a slice. That
+scalar is written into the result JSON, read back by exp14, and applied to the test set unchanged.
+The second element is the whole swept curve, serialised so that §9's figures and this guide's
+interactive threshold explorer can be rebuilt from the committed result without refitting anything.</p>
+
+<p><strong>The same function serves both costing schemes.</strong> Passing
+<code>ead=LIMIT_BAL</code> switches from "every error costs the same" to per-client exposure
+weighting, and the dispatch lives in one <code>if</code>:</p>
+
+<div class="codehdr"><span class="fn">src/costs.py</span><span class="tag">excerpt</span></div>
+<pre><code>    <span class="k">if</span> ead <span class="k">is</span> <span class="k">None</span>:
+        <span class="k">return</span> <span class="f">float</span>(r * fn.<span class="f">sum</span>() + fp.<span class="f">sum</span>())
+    ead = np.<span class="f">asarray</span>(ead, dtype=<span class="f">float</span>)
+    <span class="k">return</span> <span class="f">float</span>(<span class="n">LGD</span> * ead[fn].<span class="f">sum</span>() + <span class="n">NIM</span> * ead[fp].<span class="f">sum</span>())
+</code></pre>
+
+<p>Note that the flat scheme uses the abstract ratio <code>r</code> while the instance-weighted
+scheme uses the underlying <code>LGD</code> and <code>NIM</code> directly. That is not inconsistency
+— it is the point. The flat scheme asks "what happens as the ratio varies?", so it must be
+parameterised by the ratio. The instance scheme asks "what is the dollar cost on this portfolio?",
+so it must use the two credit parameters the ratio was derived from. The fact that
+<code>LGD/NIM = </code><span data-v="elkan-r6"></span>'s reciprocal reproduces the headline ratio is
+then a consistency check rather than a coincidence.</p>
+
+<h4><code>metrics.py</code> — the function that refuses to choose a threshold</h4>
+
+<div class="codehdr"><span class="fn">src/metrics.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">evaluate</span>(y_true, proba, threshold=<span class="n">0.5</span>):
+    <span class="s">"""Ranking, calibration and thresholded-decision metrics for one prediction vector.
+
+    `threshold` must already be frozen from out-of-fold data (see costs.pick_threshold_oof);
+    this function never searches for one.
+    """</span>
+    pred = (proba &gt;= threshold).<span class="f">astype</span>(<span class="f">int</span>)
+    tn, fp, fn, tp = <span class="f">confusion_matrix</span>(y_true, pred, labels=[<span class="n">0</span>, <span class="n">1</span>]).<span class="f">ravel</span>()
+</code></pre>
+
+<div class="box trap">
+  <div class="bt">Two small things that prevent large errors</div>
+  <p><code>labels=[0, 1]</code> is not decoration. Without it,
+  <code>confusion_matrix</code> infers the label set from what it observes, so a subgroup in which the
+  model flags nobody returns a 1×1 matrix and <code>.ravel()</code> raises a shape error — or worse,
+  in a 2-element case, silently assigns the counts to the wrong variables. §13 evaluates small
+  subgroups at a threshold of <span data-v="fin-tau"></span>, so degenerate confusion matrices are a
+  realistic occurrence, not a hypothetical.</p>
+  <p style="margin-bottom:0">And the decision is always <code>(proba &gt;= threshold)</code>, never
+  <code>model.predict(X)</code>. <code>predict()</code> hardcodes 0.5. Claiming a cost-optimised
+  threshold of <span data-v="fin-tau"></span> in the text while computing the confusion matrix with
+  <code>predict()</code> is a specific, common, and completely invisible failure: the numbers look
+  fine, they are just answering a different question than the prose says. The only defence is to
+  never call <code>predict()</code> anywhere in the project, which is the convention here.</p>
+</div>
+
+<h4>DeLong, and why it is implemented rather than imported</h4>
+
+<p>§14.4 uses the DeLong test for exactly one comparison. There is no DeLong in scikit-learn or
+scipy, so it is implemented here, using the Sun &amp; Xu (2014) O(n log n) reformulation rather than
+the original O(n²) algorithm.</p>
+
+<div class="codehdr"><span class="fn">src/metrics.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">delong_test</span>(y_true, proba_a, proba_b):
+    <span class="s">"""Paired DeLong test for two correlated ROC curves on the same sample.
+
+    Valid only on a single held-out set -- never across CV folds, where the samples
+    are not independent.
+    """</span>
+    order = np.<span class="f">argsort</span>(-y_true, kind=<span class="s">"mergesort"</span>)  <span class="c"># positives first, stable</span>
+    ...
+    aucs, cov = <span class="f">_fast_delong</span>(scores, n_pos)
+    var_diff = <span class="f">float</span>(cov[<span class="n">0</span>, <span class="n">0</span>] + cov[<span class="n">1</span>, <span class="n">1</span>] - <span class="n">2</span> * cov[<span class="n">0</span>, <span class="n">1</span>])
+    diff = <span class="f">float</span>(aucs[<span class="n">0</span>] - aucs[<span class="n">1</span>])
+</code></pre>
+
+<p>The <code>- 2 * cov[0, 1]</code> term is the entire reason DeLong exists. Two models scored on the
+same clients produce <em>correlated</em> ROC curves: a client who is obviously going to default is
+ranked highly by both. Treating the two AUCs as independent would use
+<code>var_a + var_b</code> and overstate the variance of their difference, making a real difference
+look insignificant. Subtracting twice the covariance recovers the much smaller true variance, which
+is why §14.4 can resolve a difference of <span data-v="dl-rule-diff"></span> at
+p <span data-v="dl-rule-p"></span> on a single test set of <span data-v="n-test"></span> rows.</p>
+
+<p><code>kind="mergesort"</code> is there for determinism: a stable sort means re-running on the same
+input produces byte-identical ordering, so the reported p-value does not wobble in its last digits
+between runs. Small thing; free; makes "re-running reproduces every number" literally true.</p>
+
+<div class="box why">
+  <div class="bt">The companion function that documents its own weakness</div>
+<pre><code><span class="k">def</span> <span class="f">paired_fold_test</span>(deltas):
+    <span class="s">"""Paired t-test on per-fold differences.
+
+    Nadeau &amp; Bengio (2003): repeated-CV t-tests are anti-conservative because the
+    training folds overlap, so the p-value is a directional indicator, not a
+    calibrated error rate.
+    """</span>
+</code></pre>
+  <p style="margin-bottom:0">Arm-vs-arm comparisons cannot use DeLong, because the 25 repeated-CV
+  folds are not an independent sample — every pair of training folds shares roughly 60% of its rows,
+  so the per-fold differences are positively correlated, the computed SD is too small, and the
+  p-value is too good. The honest move is to compute it anyway (it is the best available directional
+  signal) and to state the caveat in the docstring so it propagates into the report. §14.5's paired
+  test on the <code>PAY_0</code> ablation is reported with exactly that qualification.</p>
+</div>
+
+<h3>15.8 <code>tuning.py</code> — the search, and one piece of dependency injection</h3>
+
+<p>Eighty-eight lines. The module docstring is the justification §7 unpacks, written where the code
+is rather than only in the report:</p>
+
+<div class="codehdr"><span class="fn">src/tuning.py</span><span class="tag">module docstring</span></div>
+<pre><code><span class="s">"""Optuna TPE search.
+
+ROC-AUC is the objective: it is the declared primary metric (Lessmann et al., 2015),
+prevalence-independent so it stays comparable across the complexity ladder, and
+lower-variance across folds than PR-AUC. `aucpr` is logged every trial but not optimised.
+
+`scale_pos_weight` is deliberately absent from the space. ROC-AUC is invariant to
+monotone score transformations, so the tuner would be blind to it and pick arbitrarily;
+fixing it per arm turns the imbalance study into a controlled comparison instead.
+"""</span>
+</code></pre>
+
+<div class="codehdr"><span class="fn">src/tuning.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">make_objective</span>(X, y, folds, spw=<span class="n">1.0</span>, seed=<span class="n">SEED</span>, space=<span class="k">None</span>, model_fn=<span class="k">None</span>):
+    <span class="s">"""`model_fn(params, spw, seed) -&gt; estimator` lets each imbalance arm be tuned
+    independently while sharing one search space and one objective."""</span>
+    <span class="k">if</span> model_fn <span class="k">is</span> <span class="k">None</span>:
+        <span class="k">def</span> <span class="f">model_fn</span>(params, spw, seed):
+            <span class="k">return</span> <span class="f">xgb_classifier</span>(params, spw=spw, seed=seed)
+
+    <span class="k">def</span> <span class="f">objective</span>(trial):
+        params = <span class="f">suggest</span>(trial, space)
+        <span class="k">for</span> k, (tr, va) <span class="k">in</span> <span class="f">enumerate</span>(folds):
+            est = <span class="f">fit_one</span>(<span class="f">model_fn</span>(params, spw, seed), X.<span class="f">iloc</span>[tr], y[tr], seed=seed)
+            proba = est.<span class="f">predict_proba</span>(X.<span class="f">iloc</span>[va])[:, <span class="n">1</span>]
+            aucs.<span class="f">append</span>(<span class="f">roc_auc_score</span>(y[va], proba))
+            aps.<span class="f">append</span>(<span class="f">average_precision_score</span>(y[va], proba))
+            <span class="c"># Report after each fold so MedianPruner can abandon hopeless trials early.</span>
+            trial.<span class="f">report</span>(<span class="f">float</span>(np.<span class="f">mean</span>(aucs)), step=k)
+            <span class="k">if</span> trial.<span class="f">should_prune</span>():
+                <span class="k">raise</span> optuna.<span class="f">TrialPruned</span>()
+        trial.<span class="f">set_user_attr</span>(<span class="s">"pr_auc_mean"</span>, <span class="f">float</span>(np.<span class="f">mean</span>(aps)))
+        <span class="k">return</span> <span class="f">float</span>(np.<span class="f">mean</span>(aucs))
+</code></pre>
+
+<div class="tw"><table>
+<thead><tr><th>Design choice</th><th>What it buys</th></tr></thead>
+<tbody>
+<tr><td><code>model_fn</code> injected, defaulting to plain XGBoost</td>
+  <td>Arm D of the imbalance study is tuned by passing
+  <code>lambda p, s, sd: SmoteXGB(params=p, seed=sd)</code>. One objective, one search space, one
+  pruner, four arms. Without injection each arm would need its own near-duplicate objective, and
+  near-duplicate objectives drift.</td></tr>
+<tr><td><code>trial.report(..., step=k)</code> inside the fold loop</td>
+  <td>Pruning granularity becomes a <em>fold</em>, not a trial. A hopeless parameter set is abandoned
+  after fold 2 instead of burning all five. <span data-v="tune-pruned"></span> of the
+  <span data-v="tune-trials"></span> trials were pruned, which is where most of the time saving
+  comes from.</td></tr>
+<tr><td>The reported value is the <em>running</em> mean <code>np.mean(aucs)</code></td>
+  <td>MedianPruner compares like with like: at step <em>k</em> it compares this trial's mean over
+  <em>k+1</em> folds against other trials' means over the same number of folds. Reporting the single
+  latest fold's AUC instead would make the comparison noisier and prune good trials that happened to
+  draw a hard fold first.</td></tr>
+<tr><td><code>set_user_attr("pr_auc_mean", ...)</code></td>
+  <td>PR-AUC is <em>logged</em> every trial and never optimised, exactly as the docstring promises. It
+  can therefore be reported, and the claim "we tracked it but did not chase it" is checkable against
+  the study database.</td></tr>
+</tbody></table></div>
+
+<div class="codehdr"><span class="fn">src/tuning.py</span><span class="tag">excerpt</span></div>
+<pre><code>    study = optuna.<span class="f">create_study</span>(
+        study_name=study_name,
+        storage=<span class="s">f"sqlite:///{storage_path}"</span>,
+        direction=<span class="s">"maximize"</span>,
+        sampler=optuna.samplers.<span class="f">TPESampler</span>(seed=seed, multivariate=<span class="k">True</span>),
+        pruner=optuna.pruners.<span class="f">MedianPruner</span>(n_startup_trials=<span class="n">10</span>, n_warmup_steps=<span class="n">2</span>),
+        load_if_exists=<span class="k">True</span>,
+    )
+    done = <span class="f">len</span>([t <span class="k">for</span> t <span class="k">in</span> study.trials
+                <span class="k">if</span> t.state <span class="k">in</span> (optuna.trial.TrialState.COMPLETE,
+                               optuna.trial.TrialState.PRUNED)])
+    remaining = <span class="f">max</span>(<span class="n">0</span>, n_trials - done)
+    <span class="k">if</span> remaining:
+        <span class="c"># XGBoost already parallelises across threads; Optuna stays single-process to</span>
+        <span class="c"># avoid thread oversubscription.</span>
+        study.<span class="f">optimize</span>(..., n_trials=remaining, n_jobs=<span class="n">1</span>, show_progress_bar=<span class="k">False</span>)
+</code></pre>
+
+<div class="box key">
+  <div class="bt">Why the study is persisted, and why <code>n_jobs=1</code></div>
+  <p><strong>SQLite storage with <code>load_if_exists=True</code></strong> makes the search resumable
+  and, more importantly, makes it <em>inspectable after the fact</em>. The
+  <span data-v="tune-trials"></span>-trial history is what lets §7 show that the objective surface is
+  nearly flat — <span data-v="tune-span"></span> of ROC-AUC separates the best trial from the worst
+  completed one, against a pooled fold-SD of <span data-v="tune-pooled-sd"></span> — rather than
+  merely asserting it. The <code>remaining</code> arithmetic counts both COMPLETE and PRUNED trials
+  towards the budget, so a resumed study converges on
+  <span data-v="tune-trials"></span> total rather than running
+  <span data-v="tune-trials"></span> <em>more</em>.</p>
+  <p style="margin-bottom:0"><strong>Thread oversubscription</strong> is the quiet performance trap of
+  this stack. <code>XGB_FIXED</code> sets <code>n_jobs=-1</code>, so each fit already saturates every
+  core. Setting Optuna's <code>n_jobs</code> above 1 would launch several such fits concurrently, and
+  on an <em>n</em>-core machine you would get <em>n</em> processes each spawning <em>n</em> threads —
+  n² threads fighting over n cores, with context-switching overhead that typically makes the whole
+  search <em>slower</em> than serial. One parallelism layer at a time.</p>
+</div>
+
+<h3>15.9 The anatomy of one experiment</h3>
+
+<p>With the package doing the work, each experiment script is thin: it assembles components, and
+almost its only original content is the set of arms it defines and the <code>notes</code> it writes.
+<code>exp03_imbalance</code> is the most instructive because it touches nearly every module.</p>
+
+<div class="widget">
+  <div class="wt">Interactive · walking <code>python -m experiments.exp03_imbalance</code> down the layers</div>
+  <p class="wd">Six stages, in execution order. Each shows the real lines and the invariant that stage
+  is responsible for. The point of the exercise is that <strong>no stage trusts the next one</strong>
+  — each enforces its own contract and fails loudly rather than degrading quietly.</p>
+  <div class="seg" id="an-seg">
+    <button data-s="0" class="on">1 · entry</button
+    ><button data-s="1">2 · artifact</button
+    ><button data-s="2">3 · context</button
+    ><button data-s="3">4 · tune</button
+    ><button data-s="4">5 · evaluate</button
+    ><button data-s="5">6 · freeze &amp; write</button>
+  </div>
+  <div id="an-code"></div>
+  <div class="readout"><div class="ro" id="an-note"></div></div>
+</div>
+
+<div class="box why">
+  <div class="bt">What the thinness is worth</div>
+  <p style="margin-bottom:0">Count what <code>exp03</code> actually decides for itself: the four arm
+  definitions, the trimmed SMOTE trial budget (<code>SMOTE_TRIALS = 60</code>, with the comment
+  "each trial resamples to ~2x rows, so the budget is trimmed"), and the notes text. Everything
+  else — the folds, the fitting, the early-stopping slice, the metric definitions, the SD convention,
+  the threshold search, the JSON schema — comes from the package and is therefore <em>identical</em>
+  to what exp01 and exp14 used. That is what makes the ladder table in §6 and the imbalance table in
+  §8 directly comparable: not care, but shared code.</p>
+</div>
+
+<details class="q"><summary>Why does <code>exp03</code> tune arms C and D with their own Optuna
+studies instead of reusing arm A's parameters at a different <code>scale_pos_weight</code>?</summary>
+<div class="dbody">
+<p>Because reusing A's parameters would confound the thing being measured. The question is "does
+reweighting help?", and the fair version of that question is "does the <em>best achievable</em>
+reweighted model beat the <em>best achievable</em> unweighted model?" If you took parameters tuned
+for <code>spw=1</code> and simply switched <code>spw</code> to
+<span data-v="spw"></span>, any underperformance could be dismissed as "you did not re-tune for it" —
+and legitimately so, since reweighting changes the gradient and Hessian magnitudes and therefore
+interacts with <code>min_child_weight</code>, <code>reg_lambda</code> and <code>eta</code>.</p>
+<p>Giving each arm its own study removes that objection, at a cost of roughly tripling the
+experiment's runtime. The finding that reweighting buys nothing in ranking (§8) is then a statement
+about the strategy rather than about one unlucky parameter transplant — which is precisely why
+<code>scale_pos_weight</code> is excluded from the search space and fixed per arm instead
+(§7.3). The two decisions are the same decision seen from two directions.</p>
+</div></details>
+
+<details class="q"><summary>Suppose you deleted <code>require_artifact</code> and made every
+experiment re-tune when <code>best_params.json</code> was missing. Name a concrete way the report
+could then become internally inconsistent.</summary>
+<div class="dbody">
+<p>Here is one path. You run exp02 and get a tuned configuration. You then run exp06 (feature
+groups), which finds <code>best_params.json</code> present and uses it. Later you delete
+<code>artifacts/</code> to reclaim disk space, or move to another machine, and run exp11 (SHAP) —
+which, under the hypothetical, silently re-tunes. TPE is seeded, but it is tuning inside a
+different script that may pass a different feature set, a different <code>spw</code>, or simply a
+different number of trials. You now have two different "tuned XGBoost" models in the project.</p>
+<p>The report then says "the tuned model achieves ROC-AUC X (§6) and its most important feature is Y
+with mean|SHAP| Z (§11)", and those two sentences describe different models. Nothing errors, no
+number looks implausible, and the inconsistency is undetectable from the outputs alone — the SHAP
+values are perfectly valid, just for a model that appears nowhere else. Exiting with
+<em>"MISSING ARTIFACT … Produced by WP6. Run that first."</em> turns an invisible inconsistency into
+a thirty-second inconvenience.</p>
+</div></details>
+

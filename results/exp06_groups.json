@@ -1,0 +1,506 @@
+{
+  "experiment_id": "exp06_groups",
+  "title": "Feature-group ablation",
+  "run_utc": "2026-09-30T09:11:42Z",
+  "seed": 42,
+  "versions": {
+    "python": "3.14.3",
+    "numpy": "2.5.3",
+    "sklearn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.52.0",
+    "optuna": "5.0.0",
+    "imblearn": "0.14.2",
+    "pandas": "3.0.6"
+  },
+  "runtime_sec": 297.7,
+  "config": {
+    "groups": {
+      "demographic": [
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE"
+      ],
+      "limit": [
+        "LIMIT_BAL"
+      ],
+      "pay_status": [
+        "PAY_0",
+        "PAY_2",
+        "PAY_3",
+        "PAY_4",
+        "PAY_5",
+        "PAY_6"
+      ],
+      "bill": [
+        "BILL_AMT1",
+        "BILL_AMT2",
+        "BILL_AMT3",
+        "BILL_AMT4",
+        "BILL_AMT5",
+        "BILL_AMT6"
+      ],
+      "pay_amt": [
+        "PAY_AMT1",
+        "PAY_AMT2",
+        "PAY_AMT3",
+        "PAY_AMT4",
+        "PAY_AMT5",
+        "PAY_AMT6"
+      ]
+    },
+    "leave_one_out_loss": {
+      "demographic": 0.0013176030394880245,
+      "limit": 0.007594963183652936,
+      "pay_status": 0.04719038677747778,
+      "bill": 0.006425355679367528,
+      "pay_amt": 0.0021307714810429035
+    },
+    "only_one_auc": {
+      "demographic": 0.5646189869289271,
+      "limit": 0.6174982449788553,
+      "pay_status": 0.7491513599623394,
+      "bill": 0.6330996297918702,
+      "pay_amt": 0.6863319394028893
+    }
+  },
+  "rows": [
+    {
+      "label": "all_groups",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7845418198217665,
+        "roc_auc_sd": 0.00711929880687044,
+        "pr_auc_mean": 0.5602203741928651,
+        "pr_auc_sd": 0.014612254574967478,
+        "brier_mean": 0.1347932654619217,
+        "brier_sd": 0.004135158657298805,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "all five groups",
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_0",
+        "PAY_2",
+        "PAY_3",
+        "PAY_4",
+        "PAY_5",
+        "PAY_6",
+        "BILL_AMT1",
+        "BILL_AMT2",
+        "BILL_AMT3",
+        "BILL_AMT4",
+        "BILL_AMT5",
+        "BILL_AMT6",
+        "PAY_AMT1",
+        "PAY_AMT2",
+        "PAY_AMT3",
+        "PAY_AMT4",
+        "PAY_AMT5",
+        "PAY_AMT6"
+      ]
+    },
+    {
+      "label": "drop_demographic",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 19,
+      "cv": {
+        "roc_auc_mean": 0.7832242167822785,
+        "roc_auc_sd": 0.007483833664978256,
+        "pr_auc_mean": 0.5574357219259715,
+        "pr_auc_sd": 0.013983436974018637,
+        "brier_mean": 0.13654660403728486,
+        "brier_sd": 0.008148369046263329,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "leave-one-out: demographic removed",
+      "features": [
+        "LIMIT_BAL",
+        "PAY_0",
+        "PAY_2",
+        "PAY_3",
+        "PAY_4",
+        "PAY_5",
+        "PAY_6",
+        "BILL_AMT1",
+        "BILL_AMT2",
+        "BILL_AMT3",
+        "BILL_AMT4",
+        "BILL_AMT5",
+        "BILL_AMT6",
+        "PAY_AMT1",
+        "PAY_AMT2",
+        "PAY_AMT3",
+        "PAY_AMT4",
+        "PAY_AMT5",
+        "PAY_AMT6"
+      ]
+    },
+    {
+      "label": "drop_limit",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 22,
+      "cv": {
+        "roc_auc_mean": 0.7769468566381136,
+        "roc_auc_sd": 0.007896624955624413,
+        "pr_auc_mean": 0.5537197794986719,
+        "pr_auc_sd": 0.014718065302854974,
+        "brier_mean": 0.13842244923114777,
+        "brier_sd": 0.009522170948302836,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "leave-one-out: limit removed",
+      "features": [
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_0",
+        "PAY_2",
+        "PAY_3",
+        "PAY_4",
+        "PAY_5",
+        "PAY_6",
+        "BILL_AMT1",
+        "BILL_AMT2",
+        "BILL_AMT3",
+        "BILL_AMT4",
+        "BILL_AMT5",
+        "BILL_AMT6",
+        "PAY_AMT1",
+        "PAY_AMT2",
+        "PAY_AMT3",
+        "PAY_AMT4",
+        "PAY_AMT5",
+        "PAY_AMT6"
+      ]
+    },
+    {
+      "label": "drop_pay_status",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 17,
+      "cv": {
+        "roc_auc_mean": 0.7373514330442887,
+        "roc_auc_sd": 0.007481011770586399,
+        "pr_auc_mean": 0.4586098072509613,
+        "pr_auc_sd": 0.013892348366323724,
+        "brier_mean": 0.1497023594379425,
+        "brier_sd": 0.004022497395484316,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "leave-one-out: pay_status removed",
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "BILL_AMT1",
+        "BILL_AMT2",
+        "BILL_AMT3",
+        "BILL_AMT4",
+        "BILL_AMT5",
+        "BILL_AMT6",
+        "PAY_AMT1",
+        "PAY_AMT2",
+        "PAY_AMT3",
+        "PAY_AMT4",
+        "PAY_AMT5",
+        "PAY_AMT6"
+      ]
+    },
+    {
+      "label": "drop_bill",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 17,
+      "cv": {
+        "roc_auc_mean": 0.778116464142399,
+        "roc_auc_sd": 0.007638967511377093,
+        "pr_auc_mean": 0.5527022929008492,
+        "pr_auc_sd": 0.01597896866951559,
+        "brier_mean": 0.13727476179599762,
+        "brier_sd": 0.008093186466308732,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "leave-one-out: bill removed",
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_0",
+        "PAY_2",
+        "PAY_3",
+        "PAY_4",
+        "PAY_5",
+        "PAY_6",
+        "PAY_AMT1",
+        "PAY_AMT2",
+        "PAY_AMT3",
+        "PAY_AMT4",
+        "PAY_AMT5",
+        "PAY_AMT6"
+      ]
+    },
+    {
+      "label": "drop_pay_amt",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 17,
+      "cv": {
+        "roc_auc_mean": 0.7824110483407236,
+        "roc_auc_sd": 0.008606270064061118,
+        "pr_auc_mean": 0.5550794857072712,
+        "pr_auc_sd": 0.01851093870630639,
+        "brier_mean": 0.1389860498905182,
+        "brier_sd": 0.011161580235173354,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "leave-one-out: pay_amt removed",
+      "features": [
+        "LIMIT_BAL",
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE",
+        "PAY_0",
+        "PAY_2",
+        "PAY_3",
+        "PAY_4",
+        "PAY_5",
+        "PAY_6",
+        "BILL_AMT1",
+        "BILL_AMT2",
+        "BILL_AMT3",
+        "BILL_AMT4",
+        "BILL_AMT5",
+        "BILL_AMT6"
+      ]
+    },
+    {
+      "label": "only_demographic",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 4,
+      "cv": {
+        "roc_auc_mean": 0.5646189869289271,
+        "roc_auc_sd": 0.00856012799357042,
+        "pr_auc_mean": 0.25808243372751516,
+        "pr_auc_sd": 0.008132379601895594,
+        "brier_mean": 0.17183096051216126,
+        "brier_sd": 0.000362075510119643,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "only-one: demographic alone",
+      "features": [
+        "SEX",
+        "EDUCATION",
+        "MARRIAGE",
+        "AGE"
+      ]
+    },
+    {
+      "label": "only_limit",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 1,
+      "cv": {
+        "roc_auc_mean": 0.6174982449788553,
+        "roc_auc_sd": 0.009536984743909018,
+        "pr_auc_mean": 0.2966109602097919,
+        "pr_auc_sd": 0.007797272693466822,
+        "brier_mean": 0.16943110585212706,
+        "brier_sd": 0.0018714906849987682,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "only-one: limit alone",
+      "features": [
+        "LIMIT_BAL"
+      ]
+    },
+    {
+      "label": "only_pay_status",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 6,
+      "cv": {
+        "roc_auc_mean": 0.7491513599623394,
+        "roc_auc_sd": 0.007999023072839239,
+        "pr_auc_mean": 0.5235610206903292,
+        "pr_auc_sd": 0.01544266701523299,
+        "brier_mean": 0.14845086753368378,
+        "brier_sd": 0.008626889707643871,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "only-one: pay_status alone",
+      "features": [
+        "PAY_0",
+        "PAY_2",
+        "PAY_3",
+        "PAY_4",
+        "PAY_5",
+        "PAY_6"
+      ]
+    },
+    {
+      "label": "only_bill",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 6,
+      "cv": {
+        "roc_auc_mean": 0.6330996297918702,
+        "roc_auc_sd": 0.011239946299720664,
+        "pr_auc_mean": 0.3337808955934177,
+        "pr_auc_sd": 0.014392593044559455,
+        "brier_mean": 0.16567862927913665,
+        "brier_sd": 0.0019851278165698167,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "only-one: bill alone",
+      "features": [
+        "BILL_AMT1",
+        "BILL_AMT2",
+        "BILL_AMT3",
+        "BILL_AMT4",
+        "BILL_AMT5",
+        "BILL_AMT6"
+      ]
+    },
+    {
+      "label": "only_pay_amt",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 6,
+      "cv": {
+        "roc_auc_mean": 0.6863319394028893,
+        "roc_auc_sd": 0.006549764582738014,
+        "pr_auc_mean": 0.37621188058091304,
+        "pr_auc_sd": 0.008455713344592117,
+        "brier_mean": 0.15971921980381013,
+        "brier_sd": 0.0019317946286205826,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "only-one: pay_amt alone",
+      "features": [
+        "PAY_AMT1",
+        "PAY_AMT2",
+        "PAY_AMT3",
+        "PAY_AMT4",
+        "PAY_AMT5",
+        "PAY_AMT6"
+      ]
+    }
+  ],
+  "notes": "Removing pay_status costs 0.04719 ROC-AUC, the largest leave-one-out loss, against a fold-SD of 0.00712. pay_status alone reaches 0.74915 versus 0.78454 for the full feature set, so it carries most of the available signal on its own. This confirms the Phase 1 conclusion that repayment status dominates the monetary columns. Leave-one-out and only-one disagree in the usual way: a group can be individually predictive yet redundant once the others are present, which is exactly what collinear BILL_AMT columns produce. Both views are reported rather than one. Dropping the demographic group costs +0.00132 ROC-AUC; the drop_demographic arm is consumed by WP17, which tests whether the financial columns proxy for the removed demographics (Barocas & Selbst, 2016)."
+}

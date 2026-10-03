@@ -1,0 +1,146 @@
+{
+  "experiment_id": "exp04_encoding",
+  "title": "Encoding ablation for repayment-status columns",
+  "run_utc": "2026-09-30T09:03:53Z",
+  "seed": 42,
+  "versions": {
+    "python": "3.14.3",
+    "numpy": "2.5.3",
+    "sklearn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.52.0",
+    "optuna": "5.0.0",
+    "imblearn": "0.14.2",
+    "pandas": "3.0.6"
+  },
+  "runtime_sec": 186.1,
+  "config": {
+    "paired_fold_tests_vs_native_int": {
+      "one_hot": {
+        "mean_delta": -0.0008739519653606553,
+        "sd": 0.004610711513597625,
+        "t": -0.9477408885626982,
+        "p_value": 0.3527072846346673,
+        "n": 25
+      },
+      "native_categorical": {
+        "mean_delta": 0.0008738549832471909,
+        "sd": 0.002034745302528673,
+        "t": 2.1473325977487465,
+        "p_value": 0.04207762763075682,
+        "n": 25
+      },
+      "signed_log_monetary": {
+        "mean_delta": 0.0,
+        "sd": 0.0,
+        "t": null,
+        "p_value": null,
+        "n": 25
+      }
+    },
+    "auc_spread": 0.0017478069486078773
+  },
+  "rows": [
+    {
+      "label": "native_int",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7845418198217665,
+        "roc_auc_sd": 0.00711929880687044,
+        "pr_auc_mean": 0.5602203741928651,
+        "pr_auc_sd": 0.014612254574967478,
+        "brier_mean": 0.1347932654619217,
+        "brier_sd": 0.004135158657298805,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "PAY_n as signed integers, as loaded"
+    },
+    {
+      "label": "one_hot",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 79,
+      "cv": {
+        "roc_auc_mean": 0.7836678678564059,
+        "roc_auc_sd": 0.008854020768422347,
+        "pr_auc_mean": 0.5532189975218248,
+        "pr_auc_sd": 0.018155608873829682,
+        "brier_mean": 0.13634597301483153,
+        "brier_sd": 0.007577145489644419,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "PAY_n expanded to 62 dummies"
+    },
+    {
+      "label": "native_categorical",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7854156748050137,
+        "roc_auc_sd": 0.007486334744173537,
+        "pr_auc_mean": 0.5611494629986418,
+        "pr_auc_sd": 0.014450210647949597,
+        "brier_mean": 0.13379622519016265,
+        "brier_sd": 0.0022768325153672596,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "PAY_n as pandas category dtype, enable_categorical=True"
+    },
+    {
+      "label": "signed_log_monetary",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7845418198217665,
+        "roc_auc_sd": 0.00711929880687044,
+        "pr_auc_mean": 0.5602203741928651,
+        "pr_auc_sd": 0.014612254574967478,
+        "brier_mean": 0.1347932654619217,
+        "brier_sd": 0.004135158657298805,
+        "n_fits": 25
+      },
+      "test": null,
+      "description": "sign(x)*log1p(|x|) on LIMIT_BAL, BILL_AMT and PAY_AMT"
+    }
+  ],
+  "notes": "All four encodings sit within 0.00175 ROC-AUC of each other against a fold-SD of 0.00712, so none is distinguishable from native integers. Native integers are carried forward. Trees make axis-aligned splits, so a non-monotonic response to PAY_n is recoverable by stacking splits (PAY_0 < 0.5, then PAY_0 < -1.5) -- that costs depth, not expressible functions. Integers also keep the six PAY_n columns distinct, protecting the recency gradient Phase 1 measured (Spearman rho 0.143 rising to 0.292). One-hot expands to 79 columns for no measurable gain. The signed-log arm confirms scale invariance: a monotone transform of every monetary column moves ROC-AUC by +0.00000, because axis-aligned splits depend only on rank order. Paired per-fold t-tests are reported, with the Nadeau-Bengio (2003) caveat that repeated-CV tests are anti-conservative because the training folds overlap. Note that enable_categorical=True blocks interventional TreeSHAP in shap 0.52, which is a second reason to prefer integers for a model that must be explained."
+}

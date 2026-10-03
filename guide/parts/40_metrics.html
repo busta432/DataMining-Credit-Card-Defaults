@@ -1,0 +1,407 @@
+<section id="s-metrics" data-title="Measuring honestly">
+<h2><span class="kicker">Section 4</span>Measuring honestly: what each metric can and cannot see</h2>
+
+<p class="lede">Every metric is a lossy summary. Pick the wrong one and a broken model looks
+excellent; pick one and report it alone and you will be unable to answer the obvious question in
+the viva. This section derives the four metrics the project reports — ROC-AUC, PR-AUC, Brier and
+ECE — from the confusion matrix, shows exactly what each is blind to, and demonstrates the
+blindness on your own numbers.</p>
+
+<h3>4.1 The accuracy trap, with the actual number</h3>
+
+<p>The dataset is <span data-v="prevalence-pct"></span> defaulters. So a model that is a
+<em>constant</em> — predict "no default" for every single client, read no features at all — is
+right <span data-v="majority-acc"></span> of the time.</p>
+
+<div class="box trap">
+  <div class="bt">Rung 0 exists to make this unarguable</div>
+  <p>The complexity ladder's first rung is <code>DummyClassifier(strategy="most_frequent")</code>.
+  It scores <strong><span data-v="majority-acc"></span> accuracy</strong> and
+  <strong>0.0% recall</strong>: it catches <em>zero</em> defaulters. Its ROC-AUC is exactly
+  <strong>0.500</strong>, because a constant score cannot rank anybody above anybody else.</p>
+  <p style="margin-bottom:0">Compare the tuned model at the default threshold:
+  <strong><span data-v="rung6-acc"></span> accuracy</strong>. The tuned ensemble is
+  <em>four-tenths of a percentage point</em> more accurate than a model that does nothing. If
+  accuracy were the metric, the entire project would be worth 0.4 pp. It is the wrong metric —
+  and the reason it is wrong is that it weights a missed default and a rejected good customer
+  identically, which no lender does.</p>
+</div>
+
+<h3>4.2 Everything is built from four counts</h3>
+
+<p>Fix a threshold τ. Flag client <em>i</em> if <em>p̂ᵢ ≥ τ</em>. Every classification metric in
+this project is a function of the resulting four counts — nothing else:</p>
+
+<div class="tw"><table>
+<thead><tr><th></th><th>Predicted default</th><th>Predicted no default</th></tr></thead>
+<tbody>
+<tr><td><strong>Actually defaulted</strong></td>
+    <td><strong>TP</strong> — correctly flagged</td>
+    <td><strong>FN</strong> — <em>missed default</em>, costs LGD × EAD</td></tr>
+<tr><td><strong>Actually did not</strong></td>
+    <td><strong>FP</strong> — <em>rejected good customer</em>, costs forgone NIM</td>
+    <td><strong>TN</strong> — correctly left alone</td></tr>
+</tbody></table></div>
+
+<div class="eq">
+Recall (TPR, sensitivity) = TP / (TP + FN) &nbsp;·&nbsp;
+Precision (PPV) = TP / (TP + FP)<br>
+FPR = FP / (FP + TN) &nbsp;·&nbsp;
+Accuracy = (TP + TN) / n &nbsp;·&nbsp;
+F1 = 2·P·R / (P + R)<span class="n">(7)</span></div>
+
+<dl class="vardef">
+<dt>Recall</dt><dd>answers <em>"of the clients who did default, what fraction did we flag?"</em>
+  — the lender's exposure question</dd>
+<dt>Precision</dt><dd>answers <em>"of the clients we flagged, what fraction really defaulted?"</em>
+  — the operational-burden question. It depends on prevalence; recall does not</dd>
+<dt>FPR</dt><dd>the collateral-damage rate among good customers. ROC is built from (FPR, recall)
+  because <em>both</em> are computed <em>within</em> one true class — which is exactly what makes
+  ROC prevalence-independent</dd>
+<dt>F1</dt><dd>the harmonic mean of precision and recall. The project reports it but never
+  optimises it, because it silently asserts that a FP and a FN cost the same — and §9 derives
+  that they differ by a factor of six</dd>
+</dl>
+
+<h3>4.3 The threshold is a <em>business</em> decision, not a model parameter</h3>
+
+<p>This is the single most important conceptual separation in the project, so it gets stated
+twice. A trained classifier emits a <strong>score</strong>. Turning a score into an
+<em>action</em> requires a threshold. The model does not supply one — <code>0.5</code> is a
+default in the library, not a recommendation, and it is optimal only in the special case where a
+FP and a FN cost exactly the same.</p>
+
+<p>Consequently the project <strong>evaluates ranking and calibration separately from the
+decision</strong>: ROC-AUC and Brier judge the score, and §9 chooses τ from a cost model. The
+widget below is the real out-of-fold sweep — move τ and watch which error you are buying.</p>
+
+<div class="widget">
+  <div class="wt">Interactive · threshold explorer <span class="small muted">(real out-of-fold
+  data: <span data-v="oof-n"></span> training clients, <span data-v="oof-pos"></span>
+  defaulters)</span></div>
+  <p class="wd">The confusion matrix below is <em>not</em> simulated. It is reconstructed exactly
+  from the committed cost sweep in <code>results/exp10_cost.json</code> — see the box after the
+  widget for how, and why that reconstruction is provably exact. <strong>Try this:</strong> set
+  <em>r</em> = 1 and the cost minimum sits near 0.5; set <em>r</em> = 6 and it moves to ≈0.13,
+  trading eight thousand false positives for three thousand recovered defaults.</p>
+
+  <div class="seg" id="th-rseg">
+    <button data-r="1">r = 1</button><button data-r="2">r = 2</button
+    ><button data-r="5">r = 5</button><button data-r="6" class="on">r = 6 ★</button
+    ><button data-r="10">r = 10</button><button data-r="20">r = 20</button>
+  </div>
+  <div class="ctrl"><label>threshold τ</label>
+    <input type="range" id="th-tau" min="0" max="50" step="1" value="7">
+    <span class="val" id="th-tau-v"></span></div>
+
+  <div class="tw" style="margin:14px 0 0"><table class="cm">
+  <thead><tr><th></th><th class="num">flagged (p̂ ≥ τ)</th><th class="num">not flagged</th><th class="num">row total</th></tr></thead>
+  <tbody>
+  <tr><td><strong>defaulted</strong></td>
+      <td class="num good" id="th-tp"></td><td class="num bad" id="th-fn"></td>
+      <td class="num muted" id="th-rowp"></td></tr>
+  <tr><td><strong>did not</strong></td>
+      <td class="num bad" id="th-fp"></td><td class="num good" id="th-tn"></td>
+      <td class="num muted" id="th-rown"></td></tr>
+  </tbody></table></div>
+
+  <div class="readout">
+    <div class="ro"><div class="l">Recall</div><div class="v" id="th-rec"></div></div>
+    <div class="ro"><div class="l">Precision</div><div class="v" id="th-prec"></div></div>
+    <div class="ro"><div class="l">FPR</div><div class="v" id="th-fpr"></div></div>
+    <div class="ro"><div class="l">Accuracy</div><div class="v" id="th-acc"></div></div>
+    <div class="ro"><div class="l">F1</div><div class="v" id="th-f1"></div></div>
+    <div class="ro acc"><div class="l">Cost (r·FN + FP)</div><div class="v" id="th-cost"></div></div>
+  </div>
+  <svg class="chart" id="th-chart" viewBox="0 0 760 260" role="img"
+       aria-label="Out-of-fold total cost as a function of decision threshold"></svg>
+  <p class="small muted" id="th-note" style="margin:11px 0 0"></p>
+</div>
+
+<div class="box why">
+  <div class="bt">Where the widget's numbers come from — and why it is not a re-run</div>
+  <p><code>results/exp10_cost.json</code> stores, for each cost ratio, the swept threshold grid
+  and the <em>total cost</em> at each point — but not the confusion matrix. Under the flat
+  scheme, though, cost is exactly linear in the two error counts:</p>
+  <div class="eq">cost(r) = r·FN + FP<span class="n">(8)</span></div>
+  <p>Two ratios therefore give two equations in two unknowns, solvable in closed form:</p>
+  <div class="eq">FN = cost(2) − cost(1) &nbsp;&nbsp;&nbsp; FP = 2·cost(1) − cost(2)<span class="n">(9)</span></div>
+  <p>The remaining four ratios (r = 5, 6, 10, 20) then <strong>over-determine</strong> the system.
+  <code>guide/build_guide.py</code> does not discard them — it asserts that the recovered FN/FP
+  reproduce all four curves <em>to the last unit</em>, and aborts the build otherwise. They do.
+  So the matrix you are manipulating is the genuine out-of-fold one the report quotes, recovered
+  from committed results rather than recomputed with a possibly-drifted seed.</p>
+  <p style="margin-bottom:0">A pleasant side effect: the endpoints confirm the split sizes.
+  At τ → 0 nothing is missed, so FN = 0 and FP equals the entire negative class
+  (<span data-v="oof-neg"></span>); at τ → 1 nothing is flagged, so FN equals the entire positive
+  class (<span data-v="oof-pos"></span>). Those sum to <span data-v="oof-n"></span> — the training
+  portion, exactly as §5 specifies.</p>
+</div>
+
+<h3>4.4 ROC-AUC from first principles</h3>
+
+<p>Sweep τ from 1 down to 0. At each value plot (FPR, recall). The curve traced out is the
+<strong>ROC curve</strong>; the area under it is ROC-AUC. Two facts make it the project's primary
+metric, and both are worth being able to derive on demand.</p>
+
+<div class="box deriv">
+  <div class="bt">Fact 1 — AUC is a probability, via Mann–Whitney</div>
+  <p>Draw one defaulter and one non-defaulter uniformly at random. Then</p>
+  <div class="eq">ROC-AUC = P( score(defaulter) &gt; score(non-defaulter) ) + ½·P( tie )<span class="n">(10)</span></div>
+  <p><em>Sketch.</em> Order all <em>n</em> clients by score. A threshold placed between two
+  adjacent clients corresponds to one point on the ROC curve, and stepping past a positive moves
+  the curve up by 1/P while stepping past a negative moves it right by 1/N. The area accumulated
+  by one rightward step is (number of positives already above) / P × 1/N. Summing over all
+  negatives counts every (positive, negative) pair in which the positive outranks the negative,
+  divided by P·N — which is exactly the pair probability above. The AUC is the normalised
+  Mann–Whitney <em>U</em> statistic.</p>
+  <p style="margin-bottom:0"><strong>Three consequences you should be able to state.</strong>
+  (i) 0.5 is chance, because a random ranking wins half the pairs — which is why rung 0 scores
+  exactly 0.500. (ii) AUC depends only on the <em>order</em> of the scores, so <em>any strictly
+  increasing transform of the scores leaves it unchanged.</em> (iii) It is computed within
+  classes, so it does not move when prevalence does.</p>
+</div>
+
+<p>Consequence (ii) is not a curiosity — it is the load-bearing argument for two separate design
+decisions in this project, and both appear in the report's Solution section.</p>
+
+<div class="box key">
+  <div class="bt">The invariance does real work twice</div>
+  <ol>
+  <li><strong>It is why <code>scale_pos_weight</code> is excluded from the tuning search space
+  (§7).</strong> Reweighting the positive class rescales the logits roughly monotonically, so it
+  barely moves the <em>order</em> — and therefore barely moves ROC-AUC. A tuner optimising
+  ROC-AUC is nearly <em>blind</em> to the parameter and would pick a value arbitrarily, which
+  turns the imbalance study into a confound. Fixing it per arm and tuning each arm separately
+  makes it a controlled comparison instead.</li>
+  <li><strong>It is why ROC-AUC alone is insufficient and Brier is mandatory (§9).</strong>
+  Calibration <em>is</em> a monotone-transform property, so ROC-AUC cannot see it at all.
+  §4.6 shows this on your own two arms.</li>
+  </ol>
+</div>
+
+<div class="box why">
+  <div class="bt">Fact 2 — why ROC-AUC and not PR-AUC as the tuning objective</div>
+  <p>Three reasons, in the order they would be defended:</p>
+  <ul>
+  <li><strong>Comparability across the ladder.</strong> Prevalence-independence means rung 1 and
+  rung 6 are measured on the same scale even though the folds differ slightly in composition.</li>
+  <li><strong>Lower fold-to-fold variance.</strong> PR-AUC's precision term has the small positive
+  count in its denominator, so it is noisier. Across your 25 repeated-CV fits the tuned model's
+  ROC-AUC SD is <span data-v="rung6-sd"></span>; optimising a noisier objective means the tuner
+  spends trials chasing fold noise.</li>
+  <li><strong>Precedent.</strong> Lessmann et al. (2015) benchmark credit-scoring classifiers on
+  ROC-AUC, so reporting it keeps the result comparable to published work.</li>
+  </ul>
+  <p style="margin-bottom:0">PR-AUC is still logged <em>every trial</em> and reported in every
+  table — it is simply not the thing being maximised. "Log it, report it, do not optimise it" is
+  the defensible position; reporting only the metric you optimised is not.</p>
+</div>
+
+<h3>4.5 PR-AUC, and why its baseline is not 0.5</h3>
+
+<p>The precision–recall curve plots precision against recall over the same threshold sweep. Its
+no-skill baseline is the <strong>prevalence</strong>, not 0.5: a random classifier flags a
+prevalence-sized fraction of defaulters at every recall, so its precision is flat at
+<span data-v="prevalence-pct"></span>. That is exactly the rung-0 PR-AUC in your ladder
+(<span data-v="rung0-pr"></span>) — the equality is a sanity check, not a coincidence.</p>
+
+<p>Because precision has FP in its denominator and FP is drawn from the <em>large</em> class,
+PR-AUC is far more sensitive than ROC-AUC to performance in the high-threshold region where a
+lender actually operates. The ladder shows the two metrics telling the same qualitative story at
+different magnifications:</p>
+
+<div class="tw"><table>
+<thead><tr><th>Rung</th><th class="num">ROC-AUC</th><th class="num">lift over rung 0</th><th class="num">PR-AUC</th><th class="num">lift over rung 0</th></tr></thead>
+<tbody id="ladder-mini"></tbody></table></div>
+
+<p class="small muted">Table generated from <code>results/exp01_ladder.json</code>. Note the
+relative lifts: ROC-AUC rises by around 57% of its headroom, PR-AUC by over 150% of its baseline.
+Same models, same predictions — the choice of metric changes how impressive the result
+<em>sounds</em>, which is precisely why the project reports both.</p>
+
+<h3>4.6 Brier score: the metric that sees what ROC-AUC cannot</h3>
+
+<p>The Brier score is the mean squared error of the probabilities themselves:</p>
+
+<div class="eq">Brier = (1/n) Σᵢ (p̂ᵢ − yᵢ)²<span class="n">(11)</span></div>
+
+<p>Lower is better. It is a <strong>strictly proper scoring rule</strong>: it is uniquely
+minimised by reporting your true believed probability, so you cannot improve it by shading your
+forecasts. And unlike ROC-AUC it is <em>not</em> invariant to monotone transforms — squash every
+probability toward 0.5 and the ranking is untouched while the Brier score degrades. That is
+exactly the sensitivity the project needs.</p>
+
+<div class="box deriv">
+  <div class="bt">The decomposition that explains why</div>
+  <p>Murphy's decomposition splits the Brier score into three terms:</p>
+  <div class="eq">Brier = reliability − resolution + uncertainty<span class="n">(12)</span></div>
+  <dl class="vardef">
+  <dt>reliability</dt><dd>(lower better) within each probability bin, the squared gap between the
+    mean prediction and the observed rate — this is <strong>calibration error</strong></dd>
+  <dt>resolution</dt><dd>(higher better) how far bin-wise observed rates spread away from the base
+    rate — this is <strong>discrimination</strong>, the thing ROC-AUC measures</dd>
+  <dt>uncertainty</dt><dd><em>π</em>(1 − <em>π</em>) at prevalence <em>π</em>; a property of the
+    dataset, identical for every model, here <span data-v="brier-uncertainty"></span></dd>
+  </dl>
+  <p style="margin-bottom:0">So Brier = discrimination <em>and</em> calibration in one number,
+  which is both its strength and the reason the project <em>also</em> reports ECE: a single
+  scalar cannot tell you <em>which</em> term moved.</p>
+</div>
+
+<div class="box key">
+  <div class="bt">Your own numbers prove the blindness — this is report material</div>
+  <p>Arms A (<code>scale_pos_weight</code> = 1) and C
+  (<code>scale_pos_weight</code> = <span data-v="spw"></span>) from the calibration experiment:</p>
+  <div class="tw"><table>
+  <thead><tr><th>Arm</th><th class="num">ROC-AUC</th><th class="num">mean p̂</th><th class="num">Brier</th><th class="num">ECE</th></tr></thead>
+  <tbody>
+  <tr><td>A — <code>spw</code> = 1, raw</td>
+      <td class="num" data-v="cal-a-auc"></td><td class="num" data-v="cal-a-meanp"></td>
+      <td class="num" data-v="cal-a-brier"></td><td class="num" data-v="cal-a-ece"></td></tr>
+  <tr><td>C — <code>spw</code> = <span data-v="spw"></span>, raw</td>
+      <td class="num" data-v="cal-c-auc"></td><td class="num" data-v="cal-c-meanp"></td>
+      <td class="num" data-v="cal-c-brier"></td><td class="num" data-v="cal-c-ece"></td></tr>
+  </tbody></table></div>
+  <p>ROC-AUC says the two models are <strong>interchangeable</strong> — the gap is well inside one
+  fold-SD. Brier says arm C is <strong>substantially worse</strong>, and ECE says why: C's mean
+  predicted probability is <span data-v="cal-c-meanp"></span> against a true base rate of
+  <span data-v="prevalence-pct"></span>. Arm C believes roughly <em>twice as many</em> clients
+  will default as actually do.</p>
+  <p style="margin-bottom:0">Reporting ROC-AUC alone would have shipped a model whose
+  probabilities are meaningless, into a §9 cost analysis that <em>consumes probabilities</em>.
+  This is the concrete reason WP13 is marked mandatory rather than optional in the plan.</p>
+</div>
+
+<h3>4.7 Expected Calibration Error</h3>
+
+<p>Bin the predictions into <em>B</em> equal-width bins, and average the gap between predicted
+and observed within each, weighted by bin population:</p>
+
+<div class="eq">ECE = Σ<sub>b=1..B</sub> (n<sub>b</sub>/n) · | mean(p̂)<sub>b</sub> − rate(y)<sub>b</sub> |<span class="n">(13)</span></div>
+
+<p>ECE is the <em>reliability</em> term of equation (12) made legible: an L1 average of vertical
+distances from the diagonal on a reliability diagram. The project uses <em>B</em> = 10.</p>
+
+<div class="box trap">
+  <div class="bt">Three honest caveats about ECE</div>
+  <ul>
+  <li><strong>It is bin-count-dependent.</strong> More bins means fewer clients per bin, noisier
+  rates, usually a larger ECE. A quoted ECE is meaningless without its <em>B</em>.</li>
+  <li><strong>It is not a proper scoring rule.</strong> A constant predictor that always outputs
+  the base rate is <em>perfectly calibrated</em> and achieves ECE ≈ 0 while having zero
+  discrimination. ECE must therefore always be read next to a discrimination metric — which is
+  why the tables carry ROC-AUC, Brier and ECE together and never ECE alone.</li>
+  <li><strong>Equal-width binning puts most clients in the first two bins</strong> at this
+  prevalence, so the high-probability bins are sparse and their contribution is noisy. The
+  reliability curves in §9 are plotted with their bin counts for exactly this reason.</li>
+  </ul>
+</div>
+
+<h3>4.8 Which metric answers which question</h3>
+
+<div class="tw"><table>
+<thead><tr><th>Question</th><th>Metric</th><th>Blind to</th></tr></thead>
+<tbody>
+<tr><td>Does the model rank risk correctly?</td><td><strong>ROC-AUC</strong></td>
+    <td>calibration; absolute probability scale; the cost asymmetry</td></tr>
+<tr><td>How does it rank in the region a lender operates in?</td><td><strong>PR-AUC</strong></td>
+    <td>calibration; comparability across different prevalences</td></tr>
+<tr><td>Are the probabilities numerically trustworthy?</td><td><strong>Brier</strong></td>
+    <td>which of calibration/discrimination moved</td></tr>
+<tr><td>Where exactly is the miscalibration?</td><td><strong>ECE + reliability curve</strong></td>
+    <td>discrimination entirely</td></tr>
+<tr><td>What should we actually <em>do</em> about a client?</td>
+    <td><strong>expected cost at frozen τ</strong></td>
+    <td>nothing relevant — but it requires a defended cost matrix (§9)</td></tr>
+<tr><td>Is the difference between two models real?</td>
+    <td><strong>fold-SD, then DeLong on the test set</strong></td>
+    <td>n/a — see §4.9</td></tr>
+</tbody></table></div>
+
+<h3>4.9 Variance, and the rule that stops over-claiming</h3>
+
+<p>A single CV number is a point estimate with no error bar, and model-comparison claims made on
+point estimates are the most common failure in reports like this. So every metric in the project
+is reported as <strong>mean ± SD across 25 fits</strong> —
+<code>RepeatedStratifiedKFold(n_splits=5, n_repeats=5)</code>, which is 5 independent 5-fold
+partitions of the training data.</p>
+
+<div class="codehdr">src/runner.py — the one evaluation path, variance built in</div>
+<pre><code><span class="c"># Every experiment calls this. Divergent CV loops are the single biggest</span>
+<span class="c"># source of numbers that cannot be reconciled when the report is written.</span>
+<span class="k">def</span> <span class="f">cv_evaluate</span>(estimator, X, y, <span class="n">*</span>, repeated=<span class="k">True</span>, ...):
+    cv = <span class="f">RepeatedStratifiedKFold</span>(n_splits=<span class="d">5</span>, n_repeats=<span class="d">5</span>,
+                                 random_state=<span class="d">7</span>)   <span class="c"># 25 fits</span>
+    <span class="c"># ... per-fold fit, per-fold predict_proba, per-fold metrics ...</span>
+    <span class="k">return</span> {
+        <span class="s">"roc_auc_mean"</span>: <span class="f">float</span>(np.<span class="f">mean</span>(aucs)),
+        <span class="s">"roc_auc_sd"</span>:   <span class="f">float</span>(np.<span class="f">std</span>(aucs, ddof=<span class="d">1</span>)),  <span class="c"># SD, not SEM</span>
+        ...
+    }
+</code></pre>
+
+<div class="box mark">
+  <div class="bt">Two deliberate choices in those four lines</div>
+  <ul>
+  <li><strong><code>random_state=7</code>, not <code>SEED=42</code>.</strong> The tuner's folds use
+  42. If the variance-reporting folds reused 42 they would be the <em>same partition the
+  hyperparameters were selected on</em>, and the reported SD would understate the true spread.
+  A distinct seed decorrelates them.</li>
+  <li><strong><code>ddof=1</code> and the name <code>_sd</code>.</strong> The reported figure is
+  the sample standard deviation <em>across fits</em>, not the standard error of the mean.
+  SEM = SD/√25 = SD/5 would look five times tighter and would be the wrong quantity: the question
+  is "how much does this number move if I re-partition?", not "how precisely do I know its
+  mean?".</li>
+  </ul>
+</div>
+
+<div class="box why">
+  <div class="bt">The one-SD rule</div>
+  <p>Any gap smaller than roughly one fold-SD is reported as <strong>not
+  distinguishable</strong> — stated in words, never bolded, never described as an improvement.
+  The tuned model's SD is <span data-v="rung6-sd"></span>, so differences below about 0.007
+  ROC-AUC are noise. This rule is what makes the §8 imbalance result reportable as a
+  <em>mechanistic</em> finding instead of a fabricated win.</p>
+  <p style="margin-bottom:0">Two further statistical points the project is careful about:
+  <strong>(a)</strong> repeated-CV folds overlap, so a paired t-test across them is
+  anti-conservative (Nadeau &amp; Bengio, 2003) — the project notes this and leans on SD
+  comparison instead; <strong>(b)</strong> DeLong's test is applied to <em>exactly one</em>
+  comparison, tuned XGBoost against the <code>PAY_0</code> baseline on the single held-out test
+  set, because that is its actual use case: two correlated ROC curves on the same sample. Running
+  it across CV folds would violate the independence its variance estimate assumes.</p>
+</div>
+
+<details class="q"><summary>Self-check: someone reports "94% accuracy, up from 78%" — what do you ask?</summary>
+<div class="dbody">
+<p>What the <strong>recall</strong> is, and at what threshold. On this dataset 78% is the
+do-nothing constant, so the claim is that 16 pp of accuracy was gained — but accuracy can also be
+bought by making a model <em>more</em> conservative, which <em>reduces</em> recall. Then: what the
+cost assumption is, since accuracy weights a missed default and a rejected good customer
+identically. Finally: was the threshold 0.5, and was it chosen on the test set?</p>
+</div></details>
+
+<details class="q"><summary>Self-check: two models have identical ROC-AUC to four decimals — can they behave differently?</summary>
+<div class="dbody">
+<p>Yes, in two distinct ways.</p>
+<p><strong>Calibration.</strong> ROC-AUC is invariant to monotone transforms, so one model's
+probabilities can be systematically inflated while its ranking is untouched. That is literally
+arms A and C in §4.6: indistinguishable ROC-AUC, Brier differing by
+<span data-v="cal-ac-brier-gap"></span>.</p>
+<p><strong>Local ordering.</strong> Equal total area does not mean the same curve. One model can
+dominate at low FPR — where a lender actually operates — while the other catches up at high FPR
+and ends level. This is why PR-AUC and the operating-point confusion matrix are both reported
+rather than ROC-AUC alone.</p>
+</div></details>
+
+<details class="q"><summary>Self-check: why is rung 0's PR-AUC equal to the prevalence while its ROC-AUC is exactly 0.5?</summary>
+<div class="dbody">
+<p>A constant score ranks nobody above anybody, so every randomly drawn (positive, negative) pair
+is a <em>tie</em>; by equation (10), AUC = ½ · P(tie) = ½ · 1 = 0.5.</p>
+<p>For precision–recall, every threshold either flags everyone or nobody. When everyone is
+flagged, recall = 1 and precision = TP/(TP+FP) = prevalence. The curve is the horizontal line at
+precision = prevalence, so its area is the prevalence:
+<span data-v="prevalence-pct"></span> = <span data-v="rung0-pr"></span> in the ladder JSON.</p>
+</div></details>
+
+</section>

@@ -1,0 +1,345 @@
+<section id="s-theory" data-title="How XGBoost actually works">
+<h2><span class="kicker">Section 3</span>How XGBoost actually works</h2>
+
+<p class="lede">This is the "investigation of the tool" half of the Solution section — half of 50
+marks. The goal is not to recite that XGBoost is "an optimised gradient-boosting library" but to
+derive, from scratch, the formula it uses to choose a split, and then show where every
+hyperparameter you tuned appears in that formula.</p>
+
+<h3>3.1 Start with one decision tree</h3>
+
+<p>A decision tree partitions the feature space with <strong>axis-aligned</strong> cuts: each
+internal node tests one feature against one threshold (<code>PAY_0 &lt; 0.5</code>), and each
+leaf holds a prediction. "Axis-aligned" matters — a tree cannot learn the diagonal boundary
+<code>BILL_AMT1 &gt; 2 × PAY_AMT1</code> in one cut; it must approximate it with a staircase.</p>
+
+<p>Two properties of trees drive several decisions in this project:</p>
+
+<div class="box key">
+  <div class="bt">Why trees need no feature scaling</div>
+  <p>A split asks only <em>"is this value above or below a threshold?"</em>. Any strictly
+  increasing transform of a feature — multiply by 1,000, take a log, standardise — produces the
+  <strong>same ordering</strong>, so the same split is available and the same tree is learned.
+  Trees are <em>invariant to monotone feature transforms</em>.</p>
+  <p style="margin-bottom:0">This is why Phase 1's recommendation to scale features applied to
+  <em>distance and gradient</em> learners (k-NN, SVM, logistic regression) and <strong>not</strong>
+  to this one. §10 proves it empirically: signed-log transforming every monetary column reproduces
+  the baseline ROC-AUC <strong>to the digit</strong>
+  (<span data-v="enc-native"></span> vs <span data-v="enc-signedlog"></span>) — not approximately,
+  <em>identically</em>, because the sorted order never changed.</p>
+</div>
+
+<p>The second property is the problem boosting exists to solve: a single tree deep enough to be
+accurate is deep enough to memorise noise. Constrain the depth and you underfit; release it and
+you overfit. Boosting escapes this by using many <em>deliberately weak</em> trees.</p>
+
+<h3>3.2 Boosting as additive training</h3>
+
+<p>An XGBoost model is a <strong>sum</strong> of <em>K</em> trees. For client <em>i</em>:</p>
+
+<div class="eq">ŷᵢ = σ( Σ<sub>k=1..K</sub> f<sub>k</sub>(xᵢ) )<span class="n">(1)</span></div>
+
+<dl class="vardef">
+<dt>f<sub>k</sub></dt><dd>the <em>k</em>-th tree; it outputs a real number (a <strong>leaf weight</strong>), not a class</dd>
+<dt>Σ f<sub>k</sub>(xᵢ)</dt><dd>the <strong>margin</strong>, or raw score, in log-odds units</dd>
+<dt>σ(z) = 1/(1+e<sup>−z</sup>)</dt><dd>the logistic function, mapping log-odds to a probability in (0,1)</dd>
+</dl>
+
+<div class="box why">
+  <div class="bt">Remember this: the trees live in log-odds space</div>
+  <p>The trees sum to a <em>log-odds</em> value; the sigmoid is applied once at the end. This
+  single fact explains two later decisions: why SHAP explanations are computed in <strong>margin
+  space</strong> (where they are exactly additive, §11.3), and why <code>scale_pos_weight</code>
+  shifts probabilities without improving ranking (§8.4).</p>
+</div>
+
+<p>Trees are added <strong>one at a time</strong>, and <strong>earlier trees are never
+revisited</strong>. At round <em>t</em> the model is
+ŷ<sup>(t)</sup> = ŷ<sup>(t−1)</sup> + f<sub>t</sub>(x). So the only question each round is:
+<em>given everything the model already predicts, what tree most reduces the loss?</em></p>
+
+<p>That is why boosting is often described as <strong>gradient descent in function space</strong>.
+Ordinary gradient descent takes a step in parameter space; boosting takes a step by
+<em>appending a function</em>.</p>
+
+<h3>3.3 The objective: loss plus a complexity penalty</h3>
+
+<div class="eq">𝓛<sup>(t)</sup> = Σᵢ l( yᵢ , ŷᵢ<sup>(t−1)</sup> + f<sub>t</sub>(xᵢ) ) + Ω(f<sub>t</sub>)<span class="n">(2)</span></div>
+
+<p>The first term is the training loss — for binary classification, log-loss. The second is where
+XGBoost departs from classical gradient boosting: an <strong>explicit</strong> penalty on the
+tree's own complexity, inside the objective that chooses the tree.</p>
+
+<div class="eq">Ω(f) = γT + ½λ Σ<sub>j</sub> w<sub>j</sub>² + α Σ<sub>j</sub> |w<sub>j</sub>|<span class="n">(3)</span></div>
+
+<dl class="vardef">
+<dt>T</dt><dd>number of leaves in the tree</dd>
+<dt>w<sub>j</sub></dt><dd>the output weight of leaf <em>j</em></dd>
+<dt>γ (<code>gamma</code>)</dt><dd>a flat toll charged <strong>per leaf</strong> — buys a split only if it pays for itself</dd>
+<dt>λ (<code>reg_lambda</code>)</dt><dd>L2 shrinkage on leaf weights — pulls predictions toward zero</dd>
+<dt>α (<code>reg_alpha</code>)</dt><dd>L1 shrinkage on leaf weights — can drive them to exactly zero</dd>
+</dl>
+
+<div class="box mark">
+  <div class="bt">Say this in the report</div>
+  <p>Classical gradient boosting (Friedman, 2001) controls complexity <em>externally</em> —
+  you cap the depth, or prune afterwards. XGBoost (Chen &amp; Guestrin, 2016) puts
+  <strong>Ω(f) inside the objective</strong>, so the split-selection criterion itself knows what
+  a split costs. Regularisation stops being a post-hoc correction and becomes part of the
+  learning rule. This is the single most important structural claim to make about the library.</p>
+</div>
+
+<h3>3.4 The second-order trick</h3>
+
+<p>Equation (2) is awkward: f<sub>t</sub> sits <em>inside</em> the loss function, so you cannot
+solve for the best leaf weights directly. XGBoost's move is to replace the loss with its
+<strong>second-order Taylor expansion</strong> around the current prediction.</p>
+
+<p>Recall the Taylor expansion of any smooth function:
+<em>l</em>(z + Δ) ≈ <em>l</em>(z) + <em>l</em>′(z)Δ + ½<em>l</em>″(z)Δ². Apply it with
+z = ŷᵢ<sup>(t−1)</sup> and Δ = f<sub>t</sub>(xᵢ):</p>
+
+<div class="eq">𝓛<sup>(t)</sup> ≈ Σᵢ [ gᵢ f<sub>t</sub>(xᵢ) + ½ hᵢ f<sub>t</sub>(xᵢ)² ] + Ω(f<sub>t</sub>) + const<span class="n">(4)</span></div>
+
+<dl class="vardef">
+<dt>gᵢ = ∂l/∂ŷ</dt><dd>the <strong>gradient</strong> — for log-loss, gᵢ = pᵢ − yᵢ, the signed error</dd>
+<dt>hᵢ = ∂²l/∂ŷ²</dt><dd>the <strong>Hessian</strong> — for log-loss, hᵢ = pᵢ(1 − pᵢ)</dd>
+</dl>
+
+<div class="box key">
+  <div class="bt">What g and h mean, intuitively</div>
+  <p><strong>gᵢ = pᵢ − yᵢ</strong> is how wrong the model currently is about client <em>i</em>,
+  and in which direction. A confidently-correct client contributes ≈ 0.</p>
+  <p style="margin-bottom:0"><strong>hᵢ = pᵢ(1 − pᵢ)</strong> is maximal (0.25) at p = 0.5 and
+  vanishes as p → 0 or 1. So <em>h is a measure of how uncertain the model is</em>. It behaves
+  as a <strong>per-client weight</strong>: clients the model is unsure about carry more influence
+  over the next tree's shape. This is why boosting naturally focuses on hard cases — and it is
+  the reason <code>min_child_weight</code>, which thresholds Σh, is a far subtler control than
+  "minimum samples per leaf".</p>
+</div>
+
+<p>Equation (4) is now a <strong>quadratic</strong> in the leaf weights, and quadratics have
+closed-form minima. Define for leaf <em>j</em> the sums over the clients that land in it:
+G<sub>j</sub> = Σ gᵢ and H<sub>j</sub> = Σ hᵢ. Ignoring α for clarity, the objective for that
+leaf is G<sub>j</sub>w + ½(H<sub>j</sub> + λ)w². Differentiate, set to zero:</p>
+
+<div class="eq">w*<sub>j</sub> = − G<sub>j</sub> / (H<sub>j</sub> + λ)      ⟹      best-case loss = − ½ · G<sub>j</sub>² / (H<sub>j</sub> + λ)<span class="n">(5)</span></div>
+
+<p>Now λ's role is visible: it sits in the <em>denominator</em> of the leaf weight, shrinking
+every prediction toward zero, and the shrinkage bites hardest when H<sub>j</sub> is small — i.e.
+in leaves supported by few or confidently-classified clients. Exactly where you want it.</p>
+
+<h3>3.5 The split-gain formula — the heart of the library</h3>
+
+<p>Substituting (5) into (4) for a candidate split of a node into left and right children gives
+the quantity XGBoost maximises:</p>
+
+<div class="eq">Gain = ½ [ G<sub>L</sub>²/(H<sub>L</sub>+λ) + G<sub>R</sub>²/(H<sub>R</sub>+λ) − (G<sub>L</sub>+G<sub>R</sub>)²/(H<sub>L</sub>+H<sub>R</sub>+λ) ] − γ<span class="n">(6)</span></div>
+
+<p>Read it as three terms: <em>quality of the left child</em> plus <em>quality of the right
+child</em> minus <em>quality of the parent</em>, then <em>minus the per-leaf toll</em>.</p>
+
+<div class="box key">
+  <div class="bt">The decision rule</div>
+  <p><strong>If Gain ≤ 0, don't split.</strong> γ therefore acts as a minimum
+  improvement threshold: a split must earn more than γ to exist. This is pre-pruning built into
+  the criterion — not a separate pruning pass.</p>
+</div>
+
+<p>This formula is where your hyperparameters live. Build an intuition for it by moving the
+sliders:</p>
+
+<div class="widget">
+  <div class="wt">Interactive · split-gain calculator</div>
+  <p class="wd">A node holds some clients. A candidate split sends gradient/Hessian mass left and
+  right. Equation (6) decides whether the split survives. <strong>Try this:</strong> set a large
+  gain, then raise γ until the split dies; or raise λ and watch the leaf weights collapse toward
+  zero.</p>
+  <div class="ctrl"><label>G<sub>L</sub> (left grad)</label><input type="range" id="sg-gl" min="-60" max="60" step="0.5" value="-28"><span class="val" id="sg-gl-v"></span></div>
+  <div class="ctrl"><label>H<sub>L</sub> (left hess)</label><input type="range" id="sg-hl" min="1" max="200" step="1" value="60"><span class="val" id="sg-hl-v"></span></div>
+  <div class="ctrl"><label>G<sub>R</sub> (right grad)</label><input type="range" id="sg-gr" min="-60" max="60" step="0.5" value="22"><span class="val" id="sg-gr-v"></span></div>
+  <div class="ctrl"><label>H<sub>R</sub> (right hess)</label><input type="range" id="sg-hr" min="1" max="200" step="1" value="55"><span class="val" id="sg-hr-v"></span></div>
+  <div class="ctrl"><label>λ reg_lambda</label><input type="range" id="sg-lam" min="0" max="100" step="0.5" value="34.3"><span class="val" id="sg-lam-v"></span></div>
+  <div class="ctrl"><label>γ gamma</label><input type="range" id="sg-gam" min="0" max="5" step="0.05" value="0.695"><span class="val" id="sg-gam-v"></span></div>
+  <div class="ctrl"><label>min_child_weight</label><input type="range" id="sg-mcw" min="1" max="20" step="0.1" value="4.19"><span class="val" id="sg-mcw-v"></span></div>
+  <div class="readout">
+    <div class="ro"><div class="l">Left w*</div><div class="v" id="sg-wl"></div></div>
+    <div class="ro"><div class="l">Right w*</div><div class="v" id="sg-wr"></div></div>
+    <div class="ro acc"><div class="l">Gain</div><div class="v" id="sg-gain"></div></div>
+    <div class="ro"><div class="l">Verdict</div><div class="v" id="sg-verdict" style="font-size:14px"></div></div>
+  </div>
+  <p class="small muted" id="sg-note" style="margin:13px 0 0"></p>
+  <p class="small" style="margin:9px 0 0">Sliders start at <strong>your tuned values</strong>
+  (λ = <span data-v="bp-reg_lambda"></span>, γ = <span data-v="bp-gamma"></span>,
+  <code>min_child_weight</code> = <span data-v="bp-min_child_weight"></span>).</p>
+</div>
+
+<h4>Where every tuned hyperparameter appears</h4>
+
+<div class="tw"><table>
+<thead><tr><th>Hyperparameter</th><th class="num">Your value</th><th>Where it acts</th></tr></thead>
+<tbody>
+<tr><td><code>reg_lambda</code> (λ)</td><td class="num" data-v="bp-reg_lambda"></td><td>Denominator of (5) and (6). Shrinks leaf weights; stabilises small leaves.</td></tr>
+<tr><td><code>reg_alpha</code> (α)</td><td class="num" data-v="bp-reg_alpha"></td><td>L1 term in Ω. Can zero a leaf weight outright.</td></tr>
+<tr><td><code>gamma</code> (γ)</td><td class="num" data-v="bp-gamma"></td><td>Subtracted in (6). Minimum gain for a split to exist.</td></tr>
+<tr><td><code>min_child_weight</code></td><td class="num" data-v="bp-min_child_weight"></td><td>Rejects a split if either child's <strong>ΣH</strong> falls below it. A <em>Hessian</em> floor, not a row count.</td></tr>
+<tr><td><code>max_depth</code></td><td class="num" data-v="bp-max_depth"></td><td>Caps interaction order: depth <em>d</em> can combine at most <em>d</em> features per path.</td></tr>
+<tr><td><code>eta</code></td><td class="num" data-v="bp-eta"></td><td>Multiplies every leaf weight before adding the tree. Learning rate.</td></tr>
+<tr><td><code>subsample</code></td><td class="num" data-v="bp-subsample"></td><td>Row sample per tree. Decorrelates trees.</td></tr>
+<tr><td><code>colsample_bytree</code></td><td class="num" data-v="bp-colsample_bytree"></td><td>Column sample per tree. Also spreads credit across the collinear <code>BILL_AMT</code> block.</td></tr>
+</tbody></table></div>
+
+<div class="box why">
+  <div class="bt">min_child_weight is the subtle one — and it was the plan's prediction</div>
+  <p>Because hᵢ = pᵢ(1−pᵢ), a leaf containing 50 clients the model already classifies
+  confidently (p ≈ 0.02) has ΣH ≈ 50 × 0.0196 ≈ <strong>0.98</strong>, while a leaf with 20
+  genuinely ambiguous clients (p ≈ 0.5) has ΣH ≈ 20 × 0.25 = <strong>5.0</strong>. The second
+  leaf is <em>smaller in rows</em> but carries <em>five times the Hessian mass</em>.</p>
+  <p style="margin-bottom:0"><code>min_child_weight</code> therefore means "don't build a leaf
+  unless there is enough <em>uncertainty</em> in it to justify the estimate" — which is a much
+  better-targeted control on a 22%-positive problem than a row count. The plan predicted it
+  would dominate the tuning importances on this argument. <strong>It placed third</strong>
+  (§11.6) — a documented wrong prediction, which is good Summary material.</p>
+</div>
+
+<h3>3.6 Four engineering features that make it fast and robust</h3>
+
+<h4>(a) <code>hist</code>: approximate split finding</h4>
+
+<p>Exact split finding sorts every feature at every node — O(<em>n</em> log <em>n</em>) per
+feature per node. <code>tree_method="hist"</code> instead buckets each feature into at most
+<strong>256 bins</strong> once, then scans bins: O(<em>n</em>) per node, with the gradient and
+Hessian sums accumulated per bin.</p>
+
+<div class="box key">
+  <div class="bt">On this dataset the approximation is free — and that is a real argument</div>
+  <p><code>PAY_n</code> takes 11 distinct values; <code>EDUCATION</code> 4;
+  <code>MARRIAGE</code> 3; <code>SEX</code> 2. All are <strong>far below 256</strong>, so every
+  distinct value gets its own bin and <em>no information is lost at all</em> for the features
+  that carry most of the signal (§10 shows repayment status alone reaches
+  <span data-v="grp-onlypay"></span>). Binning only approximates the continuous monetary columns,
+  where the exact cut-point between two near-identical balances is not meaningful anyway.</p>
+  <p style="margin-bottom:0">This is what made the 150-trial search affordable at
+  <strong>~2.3 s per trial</strong>.</p>
+</div>
+
+<h4>(b) Sparsity-aware default directions</h4>
+
+<p>At each split, rows with <code>NaN</code> in the split feature are sent to a learned
+<strong>default direction</strong>: XGBoost tries sending them all left, then all right, and
+keeps whichever yields higher gain. Missingness is handled <em>per split</em>, learned from data,
+at no preprocessing cost. This is the library capability that justifies the
+<code>PAY_RATIO_n</code> → <code>NaN</code> decision in §2.</p>
+
+<h4>(c) Shrinkage (<code>eta</code>) and column subsampling</h4>
+
+<p>Each new tree's leaf weights are multiplied by η before being added. Small η means each tree
+corrects only a fraction of the residual, so many trees are needed but none dominates — the
+boosting analogue of a small learning rate. Your tuner chose
+η = <strong><span data-v="bp-eta"></span></strong>, near the bottom of its range, and
+compensated with <strong><span data-v="n-trees"></span> trees</strong>.</p>
+
+<h4>(d) Early stopping</h4>
+
+<p>Rather than guessing the tree count, you cap it at 2,000 and stop when a held-out metric fails
+to improve for 50 rounds. <strong>Where that held-out slice comes from is a leakage question</strong>,
+and §5 treats it as one.</p>
+
+<div class="box trap">
+  <div class="bt">API trap: XGBoost 2.0 moved these to the constructor</div>
+  <p>In XGBoost 1.x, <code>early_stopping_rounds</code> and <code>eval_metric</code> were
+  arguments to <code>.fit()</code>. Since 2.0 they belong in the
+  <strong>constructor</strong>. Older tutorials pass them to <code>.fit()</code>, where they are
+  silently ignored — so the booster quietly optimises the default metric and never stops early.
+  <strong>Nothing errors.</strong> You just get a worse model.</p>
+</div>
+
+<div class="codehdr"><span class="tag">src/models.py</span><span class="fn">xgb_classifier()</span></div>
+<pre><code><span class="k">def</span> <span class="f">xgb_classifier</span>(params=<span class="kw">None</span>, spw=<span class="n">1.0</span>, early_stopping=<span class="kw">True</span>,
+                   enable_categorical=<span class="kw">False</span>, seed=SEED):
+    <span class="s">"""XGBoost with the project's fixed infrastructure settings.</span>
+
+<span class="s">    `early_stopping_rounds` and `eval_metric` go in the constructor, not `.fit()` --</span>
+<span class="s">    the XGBoost 2.x/3.x API moved them. `enable_categorical` is pinned False because</span>
+<span class="s">    xgboost 3.4 defaults it True and shap then refuses interventional TreeSHAP.</span>
+<span class="s">    """</span>
+    p = <span class="f">dict</span>(XGB_FIXED)
+    p[<span class="s">"enable_categorical"</span>] = enable_categorical
+    p[<span class="s">"random_state"</span>] = seed
+    p[<span class="s">"scale_pos_weight"</span>] = spw
+    <span class="k">if</span> early_stopping:
+        p[<span class="s">"n_estimators"</span>] = N_ESTIMATORS_CAP      <span class="c"># 2000 ceiling only</span>
+        p[<span class="s">"early_stopping_rounds"</span>] = ES_ROUNDS   <span class="c"># 50</span>
+    <span class="k">if</span> params:
+        p.<span class="f">update</span>(params)
+    <span class="k">return</span> <span class="f">XGBClassifier</span>(**p)
+</code></pre>
+
+<div class="box trap">
+  <div class="bt">The second version trap — a real bug you hit and fixed</div>
+  <p><code>enable_categorical</code> <strong>defaults to <code>True</code> in xgboost 3.4</strong>.
+  And <code>shap</code> 0.52 reads that <em>flag alone</em> — not whether any column is actually
+  of <code>category</code> dtype — to decide the model has categorical splits, then refuses
+  interventional TreeSHAP with
+  <code>NotImplementedError: Categorical split is not yet supported</code>.</p>
+  <p style="margin-bottom:0">Every numeric model therefore pins
+  <code>enable_categorical=False</code> explicitly. Only the deliberate categorical arm of the
+  encoding ablation sets it <code>True</code>, and that arm is not explained with interventional
+  TreeSHAP. This is recorded in <code>SETUP.md</code> — a concrete, dated, version-specific
+  interaction between two libraries is exactly the sort of detail that demonstrates real
+  engagement with the tool.</p>
+</div>
+
+<h3>3.7 The fixed infrastructure settings</h3>
+
+<div class="codehdr"><span class="tag">src/config.py</span></div>
+<pre><code>XGB_FIXED = {
+    <span class="s">"tree_method"</span>: <span class="s">"hist"</span>,          <span class="c"># 256-bin histogram split finding</span>
+    <span class="s">"enable_categorical"</span>: <span class="kw">False</span>,   <span class="c"># shap 0.52 compatibility, see above</span>
+    <span class="s">"eval_metric"</span>: <span class="s">"auc"</span>,            <span class="c"># constructor, not .fit()</span>
+    <span class="s">"n_jobs"</span>: -<span class="n">1</span>,                   <span class="c"># XGBoost threads across cores...</span>
+    <span class="s">"random_state"</span>: SEED,
+}
+</code></pre>
+
+<div class="box why">
+  <div class="bt">Thread oversubscription</div>
+  <p><code>n_jobs=-1</code> lets XGBoost use every core. Optuna is therefore run with
+  <code>n_jobs=1</code> — a single process. Running both in parallel would spawn
+  <em>cores × cores</em> threads fighting over the same CPUs, which is reliably
+  <strong>slower</strong> than either alone.</p>
+</div>
+
+<details class="q"><summary>Self-check: why is the second-order expansion worth the extra complexity over first-order?</summary>
+<div class="dbody">
+<p>Three reasons, in increasing importance:</p>
+<ol>
+<li><strong>Closed-form leaf weights.</strong> A first-order approximation is linear in <em>w</em>,
+which has no finite minimum — you must pick a step size heuristically. The quadratic in (4) has
+the exact minimiser (5). No line search.</li>
+<li><strong>A principled split criterion.</strong> Equation (6) falls out of (5) directly. Classical
+gradient boosting has to borrow a criterion (variance reduction, Gini) that is not derived from
+the loss being minimised.</li>
+<li><strong>The Hessian is a useful curvature signal in its own right.</strong> Because
+h = p(1−p), it automatically weights clients by model uncertainty, and gives
+<code>min_child_weight</code> a meaning no row count can express.</li>
+</ol>
+<p>Newton's method converges faster than gradient descent for the same reason — second-order
+information tells you how far to step, not just which way.</p>
+</div></details>
+
+<details class="q"><summary>Self-check: what is the relationship between <code>eta</code>, <code>n_estimators</code> and overfitting?</summary>
+<div class="dbody">
+<p>They trade off almost exactly. Total model capacity is roughly η × <em>K</em>: halving η and
+doubling <em>K</em> gives a similar fit, but the small-η version is <strong>smoother</strong>,
+because no single tree can move the prediction far.</p>
+<p>So you never tune <em>K</em> directly. You cap it high (2,000), tune η, and let early stopping
+discover <em>K</em>. Your tuner chose a low η = <span data-v="bp-eta"></span> and early stopping
+settled on <span data-v="n-trees"></span> trees — the signature of a problem where signal is
+modest relative to noise, so slow and heavily-regularised beats fast and flexible.</p>
+<p>This also explains the single largest finding in §7: library defaults use η = 0.3 and a
+<em>fixed</em> 100 rounds with no early stopping. Most of the measured
+<strong><span data-v="tuning-gain"></span></strong> tuning gain comes from fixing those two
+things, not from locating a precise optimum in eight dimensions.</p>
+</div></details>
+</section>

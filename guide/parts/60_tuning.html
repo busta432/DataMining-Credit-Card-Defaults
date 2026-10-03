@@ -1,0 +1,285 @@
+<section id="s-tuning" data-title="Hyperparameter tuning">
+<h2><span class="kicker">Section 7</span>Tuning: Bayesian search, and what it did <em>not</em> buy</h2>
+
+<p class="lede">Nine hyperparameters, an objective that takes two seconds to evaluate, and a
+budget. This section covers why Optuna's TPE rather than a grid, why ROC-AUC is the objective,
+why <code>scale_pos_weight</code> is deliberately <em>absent</em> from the search space, and the
+most important finding: the objective surface is almost flat, which is itself the evidence that
+the model is feature-limited rather than tuning-limited.</p>
+
+<h3>7.1 Why not grid search</h3>
+
+<p>The search space is eight-dimensional (nine with the tree count, which early stopping
+determines rather than the tuner). A grid with only four values per dimension is 4⁸ = 65,536
+fits. At ~2.3 s per five-fold evaluation that is roughly 42 hours — for a grid so coarse it would
+probably miss the optimum anyway.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Strategy</th><th>Scaling</th><th>Problem on this space</th></tr></thead>
+<tbody>
+<tr><td>Grid search</td><td>exponential in dimensions</td>
+    <td>infeasible past ~4 dimensions; spends equal effort on parameters that do not matter</td></tr>
+<tr><td>Random search</td><td>linear in budget</td>
+    <td>works, and beats grid (Bergstra &amp; Bengio, 2012) — but needs roughly 3× the trials for
+    equal quality because it never learns from what it has already tried</td></tr>
+<tr class="hi"><td><strong>TPE (Optuna)</strong></td><td>linear in budget, adaptive</td>
+    <td>builds a density model of good vs bad regions and samples where improvement is likely;
+    the chosen approach</td></tr>
+</tbody></table></div>
+
+<div class="box deriv">
+  <div class="bt">How TPE actually works — enough to explain it in a viva</div>
+  <p>Tree-structured Parzen Estimator inverts the usual Bayesian-optimisation setup. Instead of
+  modelling <em>p(score | params)</em> with a Gaussian process, it models the
+  <strong>parameters given the score</strong>. After some startup trials it splits the history at
+  a quantile <em>y*</em> (roughly the best 10%) and fits two kernel-density estimates:</p>
+  <div class="eq">ℓ(x) = p(x | score &gt; y*) &nbsp;&nbsp;&nbsp;&nbsp;
+                  g(x) = p(x | score ≤ y*)<span class="n">(15)</span></div>
+  <p>The next trial maximises the ratio <strong>ℓ(x)/g(x)</strong> — the region that is dense in
+  good trials and sparse in bad ones. This is equivalent to maximising Expected Improvement, but
+  it is cheap to sample from because one-dimensional KDEs can simply be drawn from and scored,
+  with no matrix inversion. Hence "linear in budget" where a Gaussian process is cubic.</p>
+  <p style="margin-bottom:0">The project enables <code>multivariate=True</code>, which fits the
+  densities <em>jointly</em> rather than per-parameter. That matters here because
+  <code>eta</code> and the tree count genuinely interact, as do <code>max_depth</code> and
+  <code>min_child_weight</code> — independent per-parameter densities cannot represent
+  "low <code>eta</code> is good <em>provided</em> there are enough trees".</p>
+</div>
+
+<h3>7.2 The search space, parameter by parameter</h3>
+
+<p>Every range is a judgement, and each one needs a reason. These are read directly from the
+committed <code>search_space</code> block, so the table cannot drift from what was actually
+searched:</p>
+
+<div class="tw"><table>
+<thead><tr><th>Parameter</th><th class="num">low</th><th class="num">high</th><th>scale</th>
+<th class="num">chosen</th><th>Why this range</th></tr></thead>
+<tbody id="space-tbl"></tbody></table></div>
+
+<div class="box why">
+  <div class="bt">Why three parameters are searched on a log scale and five are not</div>
+  <p>A log-uniform prior is correct when the parameter's <em>effect</em> is multiplicative — when
+  1 → 2 matters as much as 50 → 100. That is true of <code>eta</code> (halving the step size
+  roughly doubles the trees needed), of <code>reg_lambda</code> and <code>reg_alpha</code>
+  (regularisation strengths span four orders of magnitude and 0.01 vs 0.02 is a real difference
+  while 99 vs 100 is not), and of <code>min_child_weight</code>.</p>
+  <p style="margin-bottom:0">It is <em>wrong</em> for <code>subsample</code> and
+  <code>colsample_bytree</code>, which are fractions on a bounded interval where 0.6 → 0.7 and
+  0.9 → 1.0 are comparable moves; and meaningless for <code>max_depth</code>, which is a small
+  integer. Searching λ uniformly on [0.01, 100] would put 99.99% of the prior mass above 0.01 ×
+  10, so the tuner would essentially never try weak regularisation — and the chosen value
+  (<span data-v="bp-reg_lambda"></span>) sits in a region a uniform prior <em>would</em> have
+  found, which is a nice accident rather than a reason to have used one.</p>
+</div>
+
+<h3>7.3 The objective, and the parameter deliberately left out</h3>
+
+<p>The objective is <strong>five-fold mean ROC-AUC on the selection folds</strong>, for the three
+reasons §4.4 derived. PR-AUC (<code>aucpr</code>) is logged every trial and reported in every
+table but never maximised.</p>
+
+<p>The more interesting decision is an omission.</p>
+
+<div class="box key">
+  <div class="bt">Why <code>scale_pos_weight</code> is <em>not</em> in the search space</div>
+  <p>This is the single best "justification of a design choice" in the Solution section, because
+  it follows from a property of the metric rather than from a convention.</p>
+  <p><code>scale_pos_weight</code> multiplies the gradient and Hessian contributions of positive
+  rows. From equation (5), leaf weights are <em>w</em>* = −G/(H + λ), so weighting the positive
+  class rescales the margins in a roughly monotone way. And by equation (10), ROC-AUC depends only
+  on the <strong>order</strong> of the scores. A near-monotone rescaling barely changes the order,
+  so <strong>ROC-AUC barely changes</strong>.</p>
+  <p>The consequence is not "it does not matter". The consequence is that <em>the tuner cannot
+  see it</em>. Including a parameter the objective is blind to means the tuner picks a value
+  essentially at random, and that arbitrary value then rides along into every downstream
+  experiment — making every subsequent comparison a confound.</p>
+  <p style="margin-bottom:0">So it is <strong>fixed per arm</strong> and each arm is tuned
+  separately: arm A at <code>spw</code> = 1, arm C at
+  <code>spw</code> = <span data-v="spw"></span> (the neg/pos ratio), each with its own Optuna
+  study and its own <code>artifacts/best_params_*.json</code>. That converts the imbalance
+  question from a confound into the controlled comparison of §8. Then §9's Brier and ECE columns
+  measure what ROC-AUC could not see — and they find a large effect, which is exactly why the
+  parameter had to be handled outside the tuner rather than inside it.</p>
+</div>
+
+<h3>7.4 The code</h3>
+
+<div class="codehdr">src/tuning.py — <span class="fn">objective()</span></div>
+<pre><code><span class="k">def</span> <span class="f">objective</span>(trial, X, y, folds, spw=<span class="d">1.0</span>):
+    params = {name: <span class="f">_suggest</span>(trial, name, spec)
+              <span class="k">for</span> name, spec <span class="k">in</span> SEARCH_SPACE.<span class="f">items</span>()}
+    aucs, prs = [], []
+    <span class="k">for</span> k, (tr, va) <span class="k">in</span> <span class="f">enumerate</span>(folds):
+        est = <span class="f">make_xgb</span>(<span class="n">**</span>params, scale_pos_weight=spw)   <span class="c"># spw is FIXED, not suggested</span>
+        <span class="f">fit_one</span>(est, X.iloc[tr], y[tr])                 <span class="c"># inner 15% ES slice</span>
+        p = est.<span class="f">predict_proba</span>(X.iloc[va])[:, <span class="d">1</span>]
+        aucs.<span class="f">append</span>(<span class="f">roc_auc_score</span>(y[va], p))
+        prs.<span class="f">append</span>(<span class="f">average_precision_score</span>(y[va], p))
+
+        <span class="c"># Report the running mean so MedianPruner can abandon a hopeless trial</span>
+        <span class="c"># after 2 folds instead of paying for all 5.</span>
+        trial.<span class="f">report</span>(<span class="k">float</span>(np.<span class="f">mean</span>(aucs)), step=k)
+        <span class="k">if</span> trial.<span class="f">should_prune</span>():
+            <span class="k">raise</span> optuna.<span class="f">TrialPruned</span>()
+
+    trial.<span class="f">set_user_attr</span>(<span class="s">"pr_auc"</span>, <span class="k">float</span>(np.<span class="f">mean</span>(prs)))   <span class="c"># logged, not optimised</span>
+    <span class="k">return</span> <span class="k">float</span>(np.<span class="f">mean</span>(aucs))
+</code></pre>
+
+<div class="codehdr">src/tuning.py — <span class="fn">run_study()</span></div>
+<pre><code>study = optuna.<span class="f">create_study</span>(
+    direction=<span class="s">"maximize"</span>,
+    sampler=optuna.samplers.<span class="f">TPESampler</span>(seed=SEED, multivariate=<span class="k">True</span>),
+    pruner=optuna.pruners.<span class="f">MedianPruner</span>(n_startup_trials=<span class="d">10</span>, n_warmup_steps=<span class="d">2</span>),
+    storage=<span class="s">f"sqlite:///{STUDY_DB}"</span>,    <span class="c"># resumable; feeds the appendix figures</span>
+    study_name=name, load_if_exists=<span class="k">True</span>,
+)
+study.<span class="f">optimize</span>(func, n_trials=N_TRIALS, n_jobs=<span class="d">1</span>)   <span class="c"># n_jobs=1 -- see below</span>
+</code></pre>
+
+<div class="box trap">
+  <div class="bt">Three traps avoided in those two snippets</div>
+  <ul>
+  <li><strong>Thread oversubscription.</strong> XGBoost already parallelises across cores with
+  <code>n_jobs=-1</code>. Setting Optuna's <code>n_jobs</code> above 1 spawns several such
+  processes, each believing it owns every core. The threads then fight for cache and the wall
+  clock gets <em>worse</em> despite full CPU utilisation. One of the two layers must be serial,
+  and the cheaper one to serialise is the trial loop.</li>
+  <li><strong>Pruning before the sampler has learned anything.</strong>
+  <code>n_startup_trials=10</code> stops the pruner killing trials while the TPE densities are
+  still based on nothing, and <code>n_warmup_steps=2</code> means a trial survives at least two
+  folds — a trial can legitimately look poor on fold 0 and recover. The result:
+  <span data-v="tune-pruned"></span> of <span data-v="tune-trials"></span> trials pruned, which
+  is the right order of magnitude. Had it been 60% the pruner would have been throttling the
+  search instead of accelerating it.</li>
+  <li><strong>Persisting the study.</strong> <code>sqlite:///</code> plus
+  <code>load_if_exists=True</code> makes a 20-minute study resumable after an interruption and
+  makes the optimisation history and parameter-importance plots available afterwards — which is
+  how the widget below exists at all.</li>
+  </ul>
+</div>
+
+<h3>7.5 The result, and the finding hidden inside it</h3>
+
+<div class="readout" style="margin:22px 0">
+  <div class="ro"><div class="l">Trials</div><div class="v" data-v="tune-trials"></div></div>
+  <div class="ro"><div class="l">Complete</div><div class="v" data-v="tune-complete"></div></div>
+  <div class="ro"><div class="l">Pruned</div><div class="v" data-v="tune-pruned"></div></div>
+  <div class="ro"><div class="l">Wall clock</div><div class="v" data-v="tune-runtime"></div></div>
+  <div class="ro"><div class="l">Trees (early-stopped)</div><div class="v" data-v="n-trees"></div></div>
+  <div class="ro acc"><div class="l">Gain vs defaults</div><div class="v" data-v="tuning-gain"></div></div>
+</div>
+
+<p>The trial budget was raised from the planned 60–80 to
+<span data-v="tune-trials"></span> once the measured cost per trial came in at ~2.3 s rather than
+the estimated 15–30 s. A wider search was simply free, and the deviation from the plan is
+recorded in the experiment's <code>notes</code> field rather than quietly absorbed.</p>
+
+<div class="widget">
+  <div class="wt">Interactive · the tuning surface</div>
+  <p class="wd">Every completed trial, plotted against whichever hyperparameter you select.
+  <strong>Look for the absence of structure:</strong> most panels are a flat cloud, which means
+  the objective is nearly indifferent to that parameter over the searched range. Compare
+  <code>eta</code> (visible trend) against <code>reg_alpha</code> (none at all).</p>
+  <div class="seg" id="tp-seg"></div>
+  <svg class="chart" id="tp-chart" viewBox="0 0 760 290" role="img"
+       aria-label="Optuna trial objective against the selected hyperparameter"></svg>
+  <div class="readout">
+    <div class="ro"><div class="l">Best trial</div><div class="v" id="tp-best"></div></div>
+    <div class="ro"><div class="l">Worst complete</div><div class="v" id="tp-worst"></div></div>
+    <div class="ro"><div class="l">Median</div><div class="v" id="tp-med"></div></div>
+    <div class="ro"><div class="l">Full spread</div><div class="v" id="tp-span"></div></div>
+  </div>
+  <p class="small muted" id="tp-note" style="margin:11px 0 0"></p>
+</div>
+
+<div class="box key">
+  <div class="bt">The flat surface <em>is</em> the result — and it belongs in Summary</div>
+  <p>Across <span data-v="tune-complete"></span> completed trials the objective spans
+  <span data-v="tune-lo"></span> to <span data-v="tune-hi"></span> — a range of
+  <span data-v="tune-span"></span> ROC-AUC. The pooled fold-SD is
+  <span data-v="tune-pooled-sd"></span>. So <strong>the entire searched hyperparameter space is
+  worth roughly three-quarters of one fold's worth of noise</strong>, and the median trial is
+  within <span data-v="tune-med-gap"></span> of the best one.</p>
+  <p>Read that the right way round. It does <em>not</em> mean tuning was pointless: the gain over
+  library defaults is <span data-v="tuning-gain"></span>, which exceeds the pooled SD of
+  <span data-v="tune-pooled-sd"></span> and survives a DeLong test on the held-out set
+  (<em>p</em> = 1.8 × 10⁻⁸). It means that once you are anywhere in a <em>sensible</em> region,
+  the remaining headroom is small — the library defaults are simply not in that region, mostly
+  because they regularise far too little for 24,000 rows.</p>
+  <p style="margin-bottom:0">The honest conclusion, and the one that threads through the whole
+  report: <strong>performance here is bounded by the features, not by the optimiser.</strong> A
+  six-month billing snapshot cannot observe job loss, illness or income shock. §10's learning
+  curve (plateaued by half the data) and §14's <code>PAY_0</code> ablation (one column worth
+  <span data-v="pay0-cv-drop"></span>) are the two other legs of the same argument.</p>
+</div>
+
+<h3>7.6 Reading the chosen configuration</h3>
+
+<p>The tuner's choices are not arbitrary once you map them onto §3's formulae — they describe a
+<em>deliberately slow, heavily regularised, high-variance-reduction</em> model:</p>
+
+<div class="tw"><table>
+<thead><tr><th>Chosen value</th><th>What it does mechanically</th><th>What it says about the data</th></tr></thead>
+<tbody>
+<tr><td><code>eta</code> = <span data-v="bp-eta"></span></td>
+    <td>each tree moves the margin by ~1.3% of its fitted step</td>
+    <td>the signal is weak and smooth; take small steps and let
+    <span data-v="n-trees"></span> trees average out</td></tr>
+<tr><td><code>reg_lambda</code> = <span data-v="bp-reg_lambda"></span></td>
+    <td>λ in the −G/(H + λ) denominator, shrinking every leaf weight hard</td>
+    <td>strong L2 is needed, i.e. leaves are noisy — consistent with a
+    <span data-v="prevalence-pct"></span> positive rate</td></tr>
+<tr><td><code>reg_alpha</code> = <span data-v="bp-reg_alpha"></span></td>
+    <td>essentially zero L1</td>
+    <td>no leaf wants to be driven to <em>exactly</em> zero; the 23 features are all at least
+    weakly useful, which §10's group ablation independently confirms</td></tr>
+<tr><td><code>subsample</code> = <span data-v="bp-subsample"></span></td>
+    <td>each tree sees 60% of rows — the bottom of the searched range</td>
+    <td>maximum row-level decorrelation; variance reduction is worth more than fit</td></tr>
+<tr><td><code>colsample_bytree</code> = <span data-v="bp-colsample_bytree"></span></td>
+    <td>each tree sees 80% of columns</td>
+    <td>mitigates the <code>BILL_AMT</code> collinearity (VIF 13.9–25.7) by stopping every tree
+    reaching for the same correlated block</td></tr>
+<tr><td><code>max_depth</code> = <span data-v="bp-max_depth"></span>,
+        <code>gamma</code> = <span data-v="bp-gamma"></span></td>
+    <td>mid-range depth with a per-leaf toll</td>
+    <td>interactions exist and matter (depth &gt; 3), but not deep ones</td></tr>
+<tr><td><code>min_child_weight</code> = <span data-v="bp-min_child_weight"></span></td>
+    <td>a leaf needs ≥ 4.19 of <em>Hessian mass</em>, not 4.19 rows</td>
+    <td>see §3.4 — on confident rows this is hundreds of clients, which is a far stronger
+    constraint than it looks</td></tr>
+</tbody></table></div>
+
+<details class="q"><summary>Self-check: the tuner chose <code>subsample</code> = 0.60, the exact lower bound. Should the range have been wider?</summary>
+<div class="dbody">
+<p>It is a legitimate flag — a parameter pinned to its boundary usually means the optimum lies
+outside the searched interval, and the honest first response is "the range may be too narrow".</p>
+<p>Two reasons not to widen it here. Mechanically, <code>subsample</code> below ~0.5 starts to
+starve individual trees of positive examples: at <span data-v="prevalence-pct"></span> prevalence
+and 68% of the training fold, a 0.4 subsample leaves roughly 1,400 positives per tree, and leaves
+satisfying <code>min_child_weight</code> get scarce. Empirically, §7.5 shows the surface is flat
+to within <span data-v="tune-span"></span> overall, so the gradient pushing toward the boundary is
+worth a small fraction of one fold-SD — it is drift in a flat landscape, not a cliff edge.</p>
+<p>The right way to write this up is to <em>report</em> the boundary value and say both things:
+the range could be extended, and the flat surface bounds how much that could possibly buy.</p>
+</div></details>
+
+<details class="q"><summary>Self-check: why is <code>n_estimators</code> not a tuned parameter?</summary>
+<div class="dbody">
+<p>Because early stopping determines it better than a search can. It is capped at 2,000 with
+<code>early_stopping_rounds=50</code>, and the actual tree count falls out of the fit —
+<span data-v="n-trees"></span> for the chosen configuration.</p>
+<p>The reason this is strictly better: the optimal tree count is <em>conditional</em> on
+<code>eta</code>, since total capacity is roughly η × K. A tuner that searched both would waste
+most of its budget on (η, K) pairs that are jointly absurd — tiny η with few trees underfits
+badly, large η with many trees overfits — and the two parameters would have to be learned to be
+dependent. Letting early stopping resolve K for whatever η is proposed removes a dimension from
+the search <em>and</em> gives a better answer, because K is then chosen from data rather than
+from a grid.</p>
+<p>The one thing this demands is care about <em>which</em> data: see §5.4. If the stopping set
+were the validation fold, K would be fitted on the fold it is scored against.</p>
+</div></details>
+
+</section>

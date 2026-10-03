@@ -1,0 +1,278 @@
+
+/* Draw a frame's marks into an <svg> that already exists in the markup (so the
+   author-supplied viewBox and aria-label survive). */
+function drawInto(id, fr) {
+  const host = $("#" + id);
+  if (!host) return;
+  host.innerHTML = "";
+  while (fr.svg.firstChild) host.appendChild(fr.svg.firstChild);
+}
+
+/* Display names for the ladder rungs. The JSON labels are machine keys; these
+   are what a reader should see. */
+const RUNG_NAME = {
+  rung0_majority:    "0 \u00b7 majority class",
+  rung1_pay0_rule:   "1 \u00b7 PAY_0 single rule",
+  rung1b_pay0_score: "1b \u00b7 PAY_0 as a score",
+  rung2_logistic:    "2 \u00b7 logistic regression",
+  rung3_tree:        "3 \u00b7 decision tree",
+  rung4_forest:      "4 \u00b7 random forest",
+  rung5_xgb_default: "5 \u00b7 XGBoost, defaults",
+  rung6_xgb_tuned:   "6 \u00b7 XGBoost, tuned"
+};
+const RUNG_ORDER = DATA.ladder.rows.map(r => r.label);
+
+/* ===================================== 4. threshold explorer (#th-*)
+   Reconstructed exactly, not simulated. results/exp10_cost.json stores FN and
+   FP counts on a 51-point out-of-fold threshold grid; with the class totals
+   that determines TP and TN by subtraction, so every cell below is a committed
+   number rather than a model evaluated in the browser. */
+function buildThreshold() {
+  const slider = $("#th-tau");
+  if (!slider) return;
+  const O = DATA.oof;
+  const NG = O.grid.length;
+  slider.max = String(NG - 1);
+  let r = 6;
+
+  function cost(i, ratio) { return ratio * O.fn[i] + O.fp[i]; }
+  function argmin(ratio) {
+    let bi = 0, bv = Infinity;
+    for (let i = 0; i < NG; i++) { const c = cost(i, ratio); if (c < bv) { bv = c; bi = i; } }
+    return bi;
+  }
+
+  function update() {
+    const i = Math.max(0, Math.min(NG - 1, Math.round(+slider.value)));
+    const tau = O.grid[i];
+    const fn = O.fn[i], fp = O.fp[i];
+    const tp = O.pos - fn, tn = O.neg - fp;
+
+    const rec  = tp / O.pos;
+    const prec = (tp + fp) > 0 ? tp / (tp + fp) : null;
+    const fpr  = fp / O.neg;
+    const acc  = (tp + tn) / O.n;
+    const f1   = (prec === null || rec + prec === 0) ? null : 2 * prec * rec / (prec + rec);
+
+    $("#th-tau-v").textContent = tau.toFixed(3);
+    $("#th-tp").textContent   = int(tp);
+    $("#th-fn").textContent   = int(fn);
+    $("#th-rowp").textContent = int(O.pos);
+    $("#th-fp").textContent   = int(fp);
+    $("#th-tn").textContent   = int(tn);
+    $("#th-rown").textContent = int(O.neg);
+    $("#th-rec").textContent  = pct(rec, 1);
+    $("#th-prec").textContent = prec === null ? "\u2014" : pct(prec, 1);
+    $("#th-fpr").textContent  = pct(fpr, 1);
+    $("#th-acc").textContent  = pct(acc, 1);
+    $("#th-f1").textContent   = f1 === null ? "\u2014" : f3(f1);
+    $("#th-cost").textContent = int(cost(i, r));
+
+    /* Cost curve for the active r, with the optimum and the current position. */
+    const pts = O.grid.map((t, k) => [t, cost(k, r)]);
+    const lo = Math.min.apply(null, pts.map(p => p[1]));
+    const hi = Math.max.apply(null, pts.map(p => p[1]));
+    const nd = nice(lo, hi, 4);
+    const fr = frame({
+      w: 760, h: 260, pad: { l: 64, r: 16, t: 16, b: 38 },
+      xdom: [0, 1], ydom: [nd.lo, nd.hi], yticks: nd.ticks,
+      yfmt: v => v >= 10000 ? (v / 1000).toFixed(0) + "k" : int(v),
+      xticks: [0, 0.2, 0.4, 0.6, 0.8, 1].map(v => ({ v: v, label: v.toFixed(1) })),
+      ylabel: "total cost (FP-equivalents)", xlabel: "threshold \u03c4"
+    });
+    line(fr, pts, C.acc, 2.2);
+    const bi = argmin(r);
+    vline(fr, O.grid[bi], C.good, "4 3", "min at \u03c4 = " + O.grid[bi].toFixed(3));
+    dot(fr, O.grid[bi], cost(bi, r), C.good, 4.2);
+    vline(fr, tau, C.acc2, "2 2", null);
+    dot(fr, tau, cost(i, r), C.acc2, 4.2);
+    /* Elkan's analytic optimum for this r, for comparison. */
+    const pstar = 1 / (1 + r);
+    vline(fr, pstar, C.warn, "1 3", "Elkan p* = " + pstar.toFixed(3));
+    drawInto("th-chart", fr);
+
+    const excess = cost(i, r) - cost(bi, r);
+    const frozen = DATA.fairness.threshold;
+    $("#th-note").textContent =
+      "At r = " + r + " the cost-minimising grid point is \u03c4 = " + O.grid[bi].toFixed(3) +
+      ", and Elkan's analytic optimum is 1/(1+r) = " + pstar.toFixed(3) + " \u2014 a gap of " +
+      Math.abs(O.grid[bi] - pstar).toFixed(3) + ", which is itself the calibration evidence, " +
+      "because a miscalibrated model's empirical optimum would not track an analytic curve it " +
+      "never saw. You are currently at \u03c4 = " + tau.toFixed(3) + ", costing " + int(excess) +
+      " FP-equivalents more than the optimum" +
+      (excess === 0 ? " (you are on it)" : "") + ". The threshold actually frozen for the report " +
+      "is " + frozen.toFixed(4) + ". Note what accuracy does as you move: it is highest near " +
+      "\u03c4 = 0.5 and falls as recall rises, which is precisely why accuracy is not the " +
+      "objective \u2014 the cheapest decision rule is not the most often correct one.";
+  }
+
+  seg("th-rseg", "data-r", v => { r = +v; update(); });
+  slider.addEventListener("input", update);
+  update();
+}
+
+/* ===================================== 5. ROC/PR comparison table (#ladder-mini)
+   Two normalisations, because the two metrics have different null baselines:
+   ROC-AUC starts at 0.5 (coin flip), PR-AUC starts at the prevalence. */
+function buildLadderMini() {
+  const rows = DATA.ladder.rows;
+  const base = LAD.rung0_majority;
+  const auc0 = base && base.auc !== null ? base.auc : 0.5;
+  const pr0  = base && base.pr !== null ? base.pr : PREV;
+
+  fillTable("ladder-mini", rows.map(r => ({
+    name: RUNG_NAME[r.label] || r.label,
+    auc: r.auc, pr: r.pr,
+    aucLift: (r.auc === null) ? null : (r.auc - auc0) / (1 - auc0),
+    prLift:  (r.pr === null)  ? null : (r.pr - pr0) / pr0,
+    __cls: r.label === "rung6_xgb_tuned" ? "hi" : null
+  })), [
+    { k: "name" },
+    { k: "auc", cls: "num", fmt: v => f4(v) },
+    { k: "aucLift", cls: (v) => "num " + (v > 0 ? "good" : "muted"),
+      fmt: v => v === null ? "\u2014" : (v * 100).toFixed(1) + "% of headroom" },
+    { k: "pr", cls: "num", fmt: v => f4(v) },
+    { k: "prLift", cls: (v) => "num " + (v > 0 ? "good" : "muted"),
+      fmt: v => v === null ? "\u2014" : (v === 0 ? "baseline" : sg(v * 100, 0) + "% of baseline") }
+  ]);
+}
+
+/* ===================================== 6. nested split diagram (#cv-*)
+   Three levels drawn to scale against the real row counts, because the thing
+   that is hard to believe until you see the widths is how small the slice an
+   early-stopping decision is actually made on turns out to be. */
+function buildCvDiagram() {
+  const slider = $("#cv-fold");
+  if (!slider) return;
+  const nTest = DATA.final.n_test;
+  const nTrain = DATA.oof.n;
+  const nAll = nTrain + nTest;
+  const K = 5, ES = 0.15;
+
+  function update() {
+    const k = Math.round(+slider.value);
+    $("#cv-fold-v").textContent = "fold " + (k + 1) + " of " + K;
+
+    /* Fold sizes as StratifiedKFold allocates them: the first r folds take one
+       extra row when n does not divide evenly. */
+    const q = Math.floor(nTrain / K), rem = nTrain % K;
+    const sizes = [];
+    for (let i = 0; i < K; i++) sizes.push(q + (i < rem ? 1 : 0));
+    const nVal = sizes[k];
+    const nFoldTrain = nTrain - nVal;
+    const nEs = Math.floor(nFoldTrain * ES);
+    const nFit = nFoldTrain - nEs;
+
+    $("#cv-tr").textContent = int(nFoldTrain);
+    $("#cv-es").textContent = int(nEs);
+    $("#cv-va").textContent = int(nVal);
+    $("#cv-te").textContent = int(nTest);
+
+    const W = 760, L = 8, R = 8, inner = W - L - R;
+    const s = svg(W, 210);
+    const px = n => n / nAll * inner;
+
+    function blk(x, y, w, h, fill, label, sub, dashed) {
+      const g = el("g");
+      g.appendChild(el("rect", { x: x, y: y, width: Math.max(1, w), height: h, rx: 4,
+        style: "fill:" + fill + ";opacity:.9;stroke:var(--bd2)" +
+               (dashed ? ";stroke-dasharray:4 3" : "") }));
+      if (w > 54) {
+        g.appendChild(el("text", { x: x + w / 2, y: y + h / 2 - 2, "text-anchor": "middle",
+          style: "fill:var(--ink);font-size:11px;font-weight:600" }, label));
+        if (sub) g.appendChild(el("text", { x: x + w / 2, y: y + h / 2 + 12, "text-anchor": "middle",
+          style: "fill:var(--ink2);font-size:10px;font-family:var(--mono)" }, sub));
+      }
+      g.appendChild(el("title", {}, label + (sub ? " \u00b7 " + sub : "")));
+      s.appendChild(g);
+      return g;
+    }
+    function tier(y, text) {
+      s.appendChild(el("text", { x: L, y: y - 6,
+        style: "fill:var(--ink3);font-size:10px;letter-spacing:.07em" }, text));
+    }
+
+    /* Level 1: the 80/20 hold-out. */
+    tier(18, "LEVEL 1 \u00b7 hold-out, made once, before anything is fitted");
+    blk(L, 22, px(nTrain), 36, C.bd2, "training portion", int(nTrain) + " rows");
+    blk(L + px(nTrain), 22, px(nTest), 36, C.bg3, "TEST \u2014 untouched", int(nTest) + " rows", true);
+
+    /* Level 2: the five tuning folds, within the training portion only. */
+    tier(94, "LEVEL 2 \u00b7 StratifiedKFold(5) \u2014 inside the training portion only");
+    let off = L;
+    for (let i = 0; i < K; i++) {
+      const w = px(sizes[i]);
+      blk(off, 98, w, 36, i === k ? C.acc2 : C.bd2,
+          i === k ? "VALIDATION" : "train", int(sizes[i]), false);
+      off += w;
+    }
+    s.appendChild(el("rect", { x: L + px(nTrain), y: 98, width: px(nTest), height: 36, rx: 4,
+      style: "fill:none;stroke:var(--bd);stroke-dasharray:2 4" }));
+
+    /* Level 3: the early-stopping slice, carved from this fold's own train rows. */
+    tier(170, "LEVEL 3 \u00b7 eval_set carved from THIS fold's training rows \u2014 never the validation fold");
+    blk(L, 174, px(nFit), 30, C.acc, "fit", int(nFit));
+    blk(L + px(nFit), 174, px(nEs), 30, C.warn, "ES 15%", int(nEs));
+    const vx = L + px(nFit) + px(nEs);
+    s.appendChild(el("rect", { x: vx, y: 174, width: px(nVal), height: 30, rx: 4,
+      style: "fill:none;stroke:" + C.acc2 + ";stroke-dasharray:3 3" }));
+    s.appendChild(el("text", { x: vx + px(nVal) / 2, y: 193, "text-anchor": "middle",
+      style: "fill:" + C.acc2 + ";font-size:10px" }, "scored here"));
+
+    const host = $("#cv-diag");
+    if (host) { host.innerHTML = ""; while (s.firstChild) host.appendChild(s.firstChild); }
+
+    $("#cv-note").textContent =
+      "Fold " + (k + 1) + ": the booster is fitted on " + int(nFit) + " rows, its tree count is " +
+      "chosen by watching " + int(nEs) + " held-back rows, and it is then scored on " + int(nVal) +
+      " rows it has never seen in any capacity. The validation fold is not in the eval_set, so " +
+      "the stopping decision cannot be made on the data the fold score is computed from \u2014 that " +
+      "is the whole reason for level 3. Across the five folds every training row serves as " +
+      "validation exactly once, which is what makes the " + int(nTrain) + " out-of-fold " +
+      "probabilities the threshold is frozen from genuinely out-of-sample. The " + int(nTest) +
+      " test rows appear in none of the three levels.";
+  }
+
+  slider.addEventListener("input", update);
+  update();
+}
+
+/* ===================================== 7. spot the leak (#leakquiz)
+   Buttons are injected rather than written into the markup, so the quiz cannot
+   be answered by reading the HTML source, and the verdict stays hidden until a
+   choice is committed. */
+function buildLeakQuiz() {
+  const host = $("#leakquiz");
+  if (!host) return;
+  const items = $$(".lq", host);
+  let revealed = 0, correct = 0;
+
+  function score() {
+    const el2 = $("#lq-score");
+    if (el2) el2.textContent = revealed + " / " + items.length + " revealed" +
+      (revealed ? "  \u00b7  " + correct + " called correctly" : "");
+  }
+
+  items.forEach(q => {
+    const ans = q.getAttribute("data-ans");
+    const btns = document.createElement("div");
+    btns.className = "btns";
+    [["leak", "Leak"], ["fine", "Fine"]].forEach(([val, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.addEventListener("click", () => {
+        const ok = (val === ans);
+        revealed++; if (ok) correct++;
+        q.classList.add("done", ans);
+        const m = document.createElement("span");
+        m.className = "mark " + (ok ? "ok" : "no");
+        m.textContent = ok ? "\u2713 you said " + label : "\u2717 you said " + label;
+        q.querySelector("p.s").appendChild(m);
+        score();
+      });
+      btns.appendChild(b);
+    });
+    q.insertBefore(btns, q.querySelector(".x"));
+  });
+  score();
+}

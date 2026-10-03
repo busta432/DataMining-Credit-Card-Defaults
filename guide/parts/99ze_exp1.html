@@ -1,0 +1,276 @@
+
+/* ===================================== 8. the ladder table (#lad-tbl) */
+function buildLadderTable() {
+  fillTable("lad-tbl", DATA.ladder.rows.map(r => Object.assign({}, r, {
+    rung: (RUNG_NAME[r.label] || r.label).split(" \u00b7 ")[0],
+    __cls: r.label === "rung6_xgb_tuned" ? "hi" : null
+  })), [
+    { k: "rung", cls: "num" },
+    { k: "model" },
+    { k: "interpretability" },
+    { k: "auc", cls: "num", fmt: v => f4(v) },
+    { k: "sd", cls: "num muted", fmt: v => v === null ? "\u2014" : "\u00b1" + f4(v) },
+    { k: "pr", cls: "num", fmt: v => f4(v) },
+    { k: "brier", cls: "num", fmt: v => f4(v) },
+    { k: "interp_cost", cls: "num muted" }
+  ]);
+}
+
+/* ===================================== 9. ladder chart (#lad-*)
+   Performance against interpretability cost. The x-axis is the number of
+   quantities a human must read to reproduce one decision, which is what turns
+   research question 1 from an opinion into a plot with two measured axes.
+   Cost is log-scaled because it spans 1 to many thousands. */
+function buildLadderChart() {
+  const METRIC = {
+    auc:   { key: "auc",   lab: "ROC-AUC",       better: 1, fmt: f4 },
+    pr:    { key: "pr",    lab: "PR-AUC",        better: 1, fmt: f4 },
+    brier: { key: "brier", lab: "Brier score",   better: -1, fmt: f4 },
+    acc:   { key: "accuracy_at_0.5", lab: "accuracy @ \u03c4 = 0.5", better: 1, fmt: v => pct(v, 1) },
+    rec:   { key: "recall_at_0.5",   lab: "recall @ \u03c4 = 0.5",   better: 1, fmt: v => pct(v, 1) }
+  };
+
+  function draw(mode) {
+    const m = METRIC[mode] || METRIC.auc;
+    const rows = DATA.ladder.rows
+      .map(r => ({ r: r, v: r[m.key], c: Math.max(1, +r.interp_cost || 1) }))
+      .filter(d => d.v !== null && d.v !== undefined);
+    if (!rows.length) return;
+
+    const lx = d => Math.log10(d.c);
+    const xlo = 0, xhi = Math.ceil(Math.max.apply(null, rows.map(lx)) * 2) / 2 + 0.15;
+    const vs = rows.map(d => d.v);
+    const sds = DATA.ladder.rows.map(r => (mode === "auc" && r.sd) ? r.sd : 0);
+    const pad = (Math.max.apply(null, vs) - Math.min.apply(null, vs)) * 0.12 +
+                Math.max.apply(null, sds);
+    const nd = nice(Math.min.apply(null, vs) - pad, Math.max.apply(null, vs) + pad, 5);
+
+    const decades = [];
+    for (let e = 0; e <= xhi; e += 1) decades.push({ v: e, label: Math.pow(10, e).toLocaleString("en-US") });
+
+    const fr = frame({
+      w: 760, h: 400, pad: { l: 62, r: 20, t: 20, b: 46 },
+      xdom: [xlo, xhi], ydom: [nd.lo, nd.hi], yticks: nd.ticks,
+      yfmt: mode === "acc" || mode === "rec" ? (v => (v * 100).toFixed(0) + "%") : (v => v.toFixed(3)),
+      xticks: decades, xgrid: true,
+      ylabel: m.lab, xlabel: "interpretability cost \u2014 quantities a human must read (log scale)"
+    });
+
+    /* Connect the rungs in ladder order: the line is the climb. */
+    const path = RUNG_ORDER.map(lbl => rows.find(d => d.r.label === lbl)).filter(Boolean);
+    line(fr, path.map(d => [lx(d), d.v]), C.bd2, 1.4, "5 4");
+
+    rows.forEach(d => {
+      const isTuned = d.r.label === "rung6_xgb_tuned";
+      const col = isTuned ? C.good : (d.r.label.indexOf("rung1") === 0 ? C.warn : C.acc);
+      if (mode === "auc" && d.r.sd) ebar(fr, lx(d), d.v - d.r.sd, d.v + d.r.sd, col);
+      dot(fr, lx(d), d.v, col, isTuned ? 6 : 4.4,
+        (RUNG_NAME[d.r.label] || d.r.label) + "  \u00b7  " + m.lab + " " + m.fmt(d.v) +
+        "  \u00b7  interp. cost " + int(d.c));
+      const nm = (RUNG_NAME[d.r.label] || d.r.label).replace(/^\w+ \u00b7 /, "");
+      fr.g.appendChild(el("text", {
+        x: fr.x(lx(d)) + 9, y: fr.y(d.v) + (isTuned ? 16 : -8),
+        style: "fill:var(--ink2);font-size:10.5px" }, nm));
+    });
+
+    if (mode === "auc") hline(fr, 0.5, C.ink3, "3 3", "coin flip");
+    if (mode === "pr")  hline(fr, PREV, C.ink3, "3 3", "prevalence");
+    drawInto("lad-chart", fr);
+
+    /* The note states the trade-off in the units of the selected metric. */
+    const r1b = rows.find(d => d.r.label === "rung1b_pay0_score");
+    const r6 = rows.find(d => d.r.label === "rung6_xgb_tuned");
+    const r3 = rows.find(d => d.r.label === "rung3_tree");
+    let txt = "Error bars are \u00b1 1 SD across the 25 repeated-CV fits, shown for ROC-AUC only. ";
+    if (r1b && r6) {
+      const dv = (r6.v - r1b.v) * m.better;
+      txt += "From one readable column to the tuned ensemble, " + m.lab + " improves by " +
+        Math.abs(r6.v - r1b.v).toFixed(4) + " while the audit burden rises from " + int(r1b.c) +
+        " quantity to " + int(r6.c) + " \u2014 a factor of " +
+        Math.round(r6.c / r1b.c).toLocaleString("en-US") + ". ";
+      if (dv < 0) txt += "On this metric the ensemble is actually behind, which is the honest " +
+        "reading: a metric chosen for a different purpose can reverse the ranking. ";
+    }
+    if (r3 && r6) txt += "The intermediate rung matters for the argument: the decision tree at " +
+      int(r3.c) + " nodes is still readable in principle, and reaching it captures much of the " +
+      "climb \u2014 so the expensive part of the trade-off is the last, smallest increment.";
+    $("#lad-note").textContent = txt;
+  }
+
+  seg("lad-seg", "data-m", draw);
+  REDRAW.push(() => { const b = $("#lad-seg button.on"); draw(b ? b.getAttribute("data-m") : "auc"); });
+}
+
+/* ===================================== 10. search-space table (#space-tbl)
+   Rendered from the committed `space` block so the printed range cannot drift
+   from the range Optuna was actually given. */
+const SPACE_WHY = {
+  max_depth: "Beyond 8 a tree can isolate a handful of the 24k training rows; 3 is already enough for the three-way PAY_0 interactions §3 predicts.",
+  eta: "Log scale because the interesting behaviour is multiplicative: 0.01 and 0.02 differ as much as 0.15 and 0.30. Small \u03b7 plus early stopping is the standard safe regime.",
+  min_child_weight: "The highest-leverage parameter here. It bounds Hessian mass per leaf, so on a 22%-positive target it directly controls how pure a leaf is allowed to look. Log scale.",
+  subsample: "Row subsampling, the stochastic-boosting variance reduction. Not taken below 0.6: at 24k rows and 22% positives, smaller samples start to starve the minority class per tree.",
+  colsample_bytree: "Column subsampling. The explicit answer to BILL_AMT1-6 collinearity: forcing trees to see subsets decorrelates which of the six near-identical columns gets used.",
+  gamma: "The per-leaf complexity toll from equation (6). Capped at 5 because the gains being compared against it are of order 1.",
+  reg_lambda: "L2 on leaf weights, four orders of magnitude on a log scale. This is the parameter that shrinks a confident small leaf back toward zero.",
+  reg_alpha: "L1 on leaf weights, which can zero a leaf outright. Searched for completeness; §7 shows the objective is indifferent to it over this range."
+};
+
+function buildSpaceTable() {
+  const sp = TUN.space;
+  const rows = Object.keys(sp).map(k => {
+    const [kind, lo, hi, logScale] = sp[k];
+    return { p: k, lo: lo, hi: hi,
+             scale: logScale ? "log" : (kind === "int" ? "integer" : "linear"),
+             chosen: BP[k], why: SPACE_WHY[k] || "" };
+  });
+  fillTable("space-tbl", rows, [
+    { k: "p", fmt: v => "<code>" + v + "</code>" },
+    { k: "lo", cls: "num", fmt: v => v >= 1 ? String(v) : String(v) },
+    { k: "hi", cls: "num", fmt: v => String(v) },
+    { k: "scale", cls: "muted" },
+    { k: "chosen", cls: "num", fmt: v => "<strong>" + (v >= 1000 || (v < 0.01 && v > 0) ? sci(v, 4) : Number(v).toPrecision(4).replace(/\.?0+$/, "")) + "</strong>" },
+    { k: "why", fmt: v => '<span class="small">' + v + "</span>" }
+  ]);
+}
+
+/* ===================================== 11. tuning surface (#tp-*)
+   A per-parameter scatter of every completed trial. The pedagogical point is
+   the absence of structure in most panels: a flat cloud means the objective is
+   indifferent to that axis, which is also why a 142-trial search buys so
+   little over the library defaults. */
+function buildTuningSurface() {
+  const host = $("#tp-seg");
+  if (!host) return;
+  const params = Object.keys(TUN.space);
+  host.innerHTML = params.map((p, i) =>
+    '<button data-p="' + p + '"' + (i === 1 ? ' class="on"' : "") + ">" + p + "</button>"
+  ).join("");
+
+  const done = TUN.study.trials.filter(t => t.state === "COMPLETE" && t.value !== null);
+  const vals = done.map(t => t.value);
+  const best = Math.max.apply(null, vals), worst = Math.min.apply(null, vals);
+  $("#tp-best").textContent  = f4(best);
+  $("#tp-worst").textContent = f4(worst);
+  $("#tp-med").textContent   = f4(med(vals));
+  $("#tp-span").textContent  = f4(best - worst);
+
+  function draw(p) {
+    const [kind, lo, hi, logScale] = TUN.space[p];
+    const tx = v => logScale ? Math.log10(v) : v;
+    const xlo = tx(lo), xhi = tx(hi);
+    const nd = nice(worst, best, 5);
+
+    const xt = [];
+    if (logScale) {
+      for (let e = Math.ceil(xlo); e <= xhi + 1e-9; e++) xt.push({ v: e, label: sci(Math.pow(10, e), 2) });
+      if (!xt.length) xt.push({ v: xlo, label: sci(lo, 3) }, { v: xhi, label: sci(hi, 3) });
+    } else {
+      const n2 = nice(lo, hi, 5);
+      n2.ticks.filter(v => v >= lo - 1e-9 && v <= hi + 1e-9)
+              .forEach(v => xt.push({ v: v, label: String(+v.toFixed(3)) }));
+    }
+
+    const fr = frame({
+      w: 760, h: 290, pad: { l: 62, r: 18, t: 16, b: 42 },
+      xdom: [xlo, xhi], ydom: [nd.lo, nd.hi], yticks: nd.ticks, yfmt: v => v.toFixed(3),
+      xticks: xt, xgrid: true,
+      ylabel: "CV ROC-AUC", xlabel: p + (logScale ? "  (log scale)" : "")
+    });
+
+    /* Trial order encoded as opacity: later trials are darker, so TPE's
+       concentration into the promising region is visible, not just asserted. */
+    const nTr = TUN.study.trials.length;
+    done.forEach(t => {
+      const v = t.params[p];
+      if (v === undefined || v === null) return;
+      const isBest = Math.abs(t.value - best) < 1e-12;
+      const c = el("circle", {
+        cx: fr.x(tx(v)), cy: fr.y(t.value), r: isBest ? 5.5 : 3.1,
+        style: "fill:" + (isBest ? C.good : C.acc) +
+               ";opacity:" + (isBest ? 1 : (0.22 + 0.6 * t.n / nTr).toFixed(2)) +
+               (isBest ? ";stroke:var(--bg2);stroke-width:1.4" : "")
+      });
+      c.appendChild(el("title", {}, "trial " + t.n + "  \u00b7  " + p + " = " +
+        (Math.abs(v) < 0.01 ? sci(v, 3) : v.toFixed(4)) + "  \u00b7  ROC-AUC " + f5(t.value)));
+      fr.g.appendChild(c);
+    });
+
+    hline(fr, TUN.default_auc, C.warn, "4 3", "library defaults");
+    vline(fr, tx(BP[p]), C.good, "3 3", "chosen");
+    drawInto("tp-chart", fr);
+
+    /* Spearman rank correlation between the parameter and the objective: the
+       cheap, assumption-light way to say "flat cloud" with a number. */
+    const pairs = done.filter(t => t.params[p] !== undefined)
+                      .map(t => ({ x: t.params[p], y: t.value }));
+    const rho = spearman(pairs.map(d => d.x), pairs.map(d => d.y));
+    const strength = Math.abs(rho) < 0.15 ? "essentially none" :
+                     Math.abs(rho) < 0.35 ? "weak" :
+                     Math.abs(rho) < 0.6 ? "moderate" : "strong";
+    $("#tp-note").textContent =
+      done.length + " completed trials, " + (nTr - done.length) + " pruned by MedianPruner. " +
+      "Spearman \u03c1 between " + p + " and the objective is " + f3(rho) + " \u2014 " + strength +
+      " monotone association over the searched range. The whole cloud spans " + f4(best - worst) +
+      " ROC-AUC, so even the best and worst configurations differ by about " +
+      (TUN.pooled_sd ? (Math.abs(best - worst) / TUN.pooled_sd).toFixed(1) : "?") +
+      " fold-SD. Darker points are later trials: TPE concentrating into a region is visible as " +
+      "a darkening band, and where no band forms the sampler found nothing to exploit.";
+  }
+
+  seg("tp-seg", "data-p", draw);
+  REDRAW.push(() => { const b = $("#tp-seg button.on"); if (b) draw(b.getAttribute("data-p")); });
+}
+
+/* Spearman rho via Pearson on ranks, average ranks for ties. */
+function ranks(a) {
+  const idx = a.map((v, i) => [v, i]).sort((p, q) => p[0] - q[0]);
+  const r = new Array(a.length);
+  let i = 0;
+  while (i < idx.length) {
+    let j = i;
+    while (j + 1 < idx.length && idx[j + 1][0] === idx[i][0]) j++;
+    const avg = (i + j) / 2 + 1;
+    for (let k = i; k <= j; k++) r[idx[k][1]] = avg;
+    i = j + 1;
+  }
+  return r;
+}
+function spearman(a, b) {
+  if (!a.length) return null;
+  const ra = ranks(a), rb = ranks(b);
+  const ma = mean(ra), mb = mean(rb);
+  let num = 0, da = 0, db = 0;
+  for (let i = 0; i < ra.length; i++) {
+    const u = ra[i] - ma, v = rb[i] - mb;
+    num += u * v; da += u * u; db += v * v;
+  }
+  return (da && db) ? num / Math.sqrt(da * db) : 0;
+}
+
+/* ===================================== 12. imbalance arms (#imb-tbl) */
+const ARM_NAME = {
+  A_baseline:      "A \u00b7 baseline, \u03c4 = 0.5",
+  B_threshold:     "B \u00b7 same model, \u03c4 from OOF cost",
+  C_spw:           "C \u00b7 scale_pos_weight, \u03c4 = 0.5",
+  C_spw_threshold: "C\u2032 \u00b7 scale_pos_weight + \u03c4 from OOF",
+  D_smote:         "D \u00b7 SMOTE inside the fold"
+};
+function buildImbalanceTable() {
+  fillTable("imb-tbl", DATA.imbalance.rows.map(r => Object.assign({}, r, {
+    name: ARM_NAME[r.label] || r.label,
+    __cls: r.label === "B_threshold" ? "hi" : null
+  })), [
+    { k: "name" },
+    { k: "auc", cls: "num", fmt: v => f4(v) },
+    { k: "pr", cls: "num", fmt: v => f4(v) },
+    { k: "brier", cls: (v) => "num " + (v > DATA.imbalance.rows[0].brier * 1.1 ? "bad" : ""),
+      fmt: v => f4(v) },
+    { k: "oof_threshold", cls: "num muted", fmt: v => f3(v) },
+    { k: "oof_recall", cls: "num", fmt: v => pct(v, 1) },
+    { k: "oof_precision", cls: "num", fmt: v => pct(v, 1) },
+    { k: "oof_cost_r6", cls: (v) => {
+        const lo = Math.min.apply(null, DATA.imbalance.rows.map(x => x.oof_cost_r6));
+        return "num " + (v === lo ? "good" : ""); },
+      fmt: v => int(v) }
+  ]);
+}

@@ -1,0 +1,1366 @@
+# Predicting Credit Card Default with XGBoost: Gradient Boosting and the Price of Interpretability
+
+**3031ICT Data Mining — Phase 2 Individual Implementation**
+Daniel Busing · Group 24 · Algorithm: XGBoost
+
+---
+
+## 1. Introduction
+
+Phase 1 profiled the UCI *Default of Credit Card Clients* dataset (Yeh & Lien, 2009): 30,000
+Taiwanese credit card clients, 23 explanatory variables, and a binary target recording whether
+the client defaulted on their next monthly payment. After de-duplication the working set is
+**29,944 rows with 6,622 defaults — a prevalence of 22.11%**.
+
+The proposal set two research questions, and this report is organised to answer them:
+
+> **Q1.** *Does the marginal performance gain achieved by ensemble architectures and non-linear
+> models justify the corresponding loss in direct rule-based interpretability?*
+>
+> **Q2.** *Can post-hoc explainability techniques bridge this gap by providing
+> regulatory-compliant decision auditability for non-linear ensemble models?*
+
+Phase 2 is an individual deliverable, so this report implements **XGBoost only**. Two teammates
+submit a Decision Tree (Izak Murray) and a Logistic Regression (Declan Boundy) separately. Where
+this report shows a logistic regression or a single tree, those are **untuned internal reference
+implementations built here purely to locate XGBoost on a capability axis** — they are not, and
+must not be read as, my teammates' tuned submissions.
+
+Both research questions are comparative, so neither can be answered by a single accuracy number.
+Q1 needs a *ladder*: a sequence of models running from a constant prediction up to tuned
+gradient boosting, where each rung buys capability at a cost in readability that is itself
+measured rather than asserted. Q2 needs the opposite — having established that the top rung is
+unreadable, it asks whether SHAP can reconstruct an audit trail from it, and then whether that
+reconstruction is *stable enough to be an audit trail at all*. An explanation that reorders when
+the random seed changes is not a compliance artefact.
+
+Accordingly, fourteen experiments were run and their results committed to `results/*.json`; the
+report body prints five tables and six figures, and everything else is in the appendix. Three
+commitments from the Phase 1 proposal are also discharged here: the promised fairness check
+(§5.6), the promised benchmark of aggregated against individual `PAY_n` features (§5.2), and the
+design consequences of rejecting PCA (§3.8).
+
+---
+
+## 2. Solution — Part I: Investigating the `xgboost` library
+
+XGBoost (Chen & Guestrin, 2016) is a gradient-boosted decision tree library. It was chosen
+because Phase 1 established two properties of this dataset that point directly at it: the
+response to repayment status `PAY_n` is **non-monotonic** (default *falls* from 16.8% for clients
+who paid in full to 12.8% for clients revolving a balance, then climbs to 69.2% at two months
+late), and the monetary columns are **severely collinear** (`BILL_AMT1–6` carry VIF 13.9–25.7).
+A non-linear, axis-aligned learner handles the first natively and is indifferent to the second.
+
+### 2.1 The additive model and the second-order objective
+
+Boosting builds an additive model of $K$ trees, where the prediction is a sum of leaf weights in
+**log-odds (margin) space**:
+
+$$\hat{y}_i = \sigma\!\left(\sum_{k=1}^{K} f_k(\mathbf{x}_i)\right), \qquad f_k \in \mathcal{F}$$
+
+At round $t$ the regularised objective is
+
+$$\mathcal{L}^{(t)} = \sum_i l\!\left(y_i,\, \hat{y}_i^{(t-1)} + f_t(\mathbf{x}_i)\right) + \Omega(f_t),
+\qquad \Omega(f) = \gamma T + \tfrac{1}{2}\lambda \|w\|^2 + \alpha\|w\|_1$$
+
+The distinguishing move — the one that separates XGBoost from earlier gradient boosting — is that
+the loss is approximated by a **second-order Taylor expansion** about the current prediction,
+using both the gradient $g_i = \partial_{\hat{y}} l$ and the Hessian
+$h_i = \partial^2_{\hat{y}} l$:
+
+$$\mathcal{L}^{(t)} \simeq \sum_i \left[g_i f_t(\mathbf{x}_i) + \tfrac{1}{2} h_i f_t(\mathbf{x}_i)^2\right] + \Omega(f_t)$$
+
+For a fixed tree structure this is a quadratic in each leaf weight, so the optimal weight and the
+resulting leaf score have closed forms. Substituting them gives the **split gain**:
+
+$$\mathcal{G}_{\text{split}} = \frac{1}{2}\left[\frac{G_L^2}{H_L + \lambda} + \frac{G_R^2}{H_R + \lambda} - \frac{(G_L+G_R)^2}{H_L+H_R+\lambda}\right] - \gamma$$
+
+This single formula is where five of the hyperparameters tuned in §4.2 actually act, which is why
+it is worth writing out. For log-loss, $h_i = p_i(1-p_i)$, so the Hessian is a measure of
+**prediction uncertainty**: rows the model is already confident about contribute almost nothing to
+$H$. Three consequences matter for this dataset:
+
+- `reg_lambda` ($\lambda$) sits in the *denominator*. It shrinks the gain of splits supported by
+  little Hessian mass — that is, splits resting on rows the model has already decided. This is a
+  sharper regulariser than a depth cap because it is data-adaptive.
+- `gamma` ($\gamma$) is a flat toll per split. A split is only taken if it buys more than
+  $\gamma$, making it a direct complexity control.
+- `min_child_weight` is a floor on $\sum h_i$ in a child, not on the row count. On a 22.11%
+  positive class this is high-leverage: it prevents leaves that look pure only because they hold
+  a handful of uncertain minority rows. The plan flagged it as the highest-leverage parameter and
+  §4.2 confirms it empirically.
+
+### 2.2 Histogram split finding
+
+Exact greedy split finding sorts every feature at every node, costing $O(n \log n)$ per feature.
+`tree_method="hist"` instead buckets each feature into at most 256 bins once, then evaluates
+splits by scanning bin boundaries and accumulating $(G, H)$ per bin. Cost drops to $O(n)$ per
+feature per node with a one-off binning pass.
+
+The approximation is *free* on this dataset rather than merely cheap, and for a reason specific to
+the data. The six `PAY_n` columns take eleven distinct integer values ($-2$ to $8$) and `EDUCATION`,
+`MARRIAGE` and `SEX` take two to four; all of these are **exactly representable** in 256 bins, so
+no candidate split is lost. Only the monetary columns are binned lossily, and their splits are
+coarse anyway. This is what made a 150-trial Optuna search affordable at roughly 2.3 s per trial.
+
+### 2.3 Sparsity-aware split finding and the `NaN` default direction
+
+At each split XGBoost learns a **default direction** for missing values: it enumerates candidate
+splits twice, once sending `NaN` left and once right, and keeps whichever yields higher gain. The
+missing rows are therefore not imputed and not dropped — their routing is *fitted*.
+
+This is not a footnote here; it is the reason `src/data.py::engineer()` is written the way it is.
+Phase 1 documented 1,930 rows with negative `BILL_AMT`, for which a repayment ratio
+`PAY_AMT / BILL_AMT` is semantically undefined — a negative bill is a credit balance, so "what
+fraction did they repay" has no answer. Imputing zero would assert *no repayment*, which is a
+different and false claim. The implementation therefore emits `np.nan` and lets the learner decide
+where those clients belong:
+
+```python
+    # Index-aligned with the bill of the same month, matching the column naming.
+    safe_bills = np.where(bills > 0, bills, np.nan)
+    ratios = pays / safe_bills
+    for i in range(1, 7):
+        out[f"PAY_RATIO_{i}"] = ratios[:, i - 1]
+```
+
+Substituting `np.nan` *before* the division rather than guarding after it is the load-bearing
+detail: it produces `NaN` rather than $\pm\infty$, and an infinity would propagate into the
+histogram binning. `engineer()` asserts the added block is finite-or-`NaN` for exactly this
+reason. The docstring records the decision explicitly — *"NaN carries strictly more information
+than an arbitrary fill"* — because a fill value asserts a fact about the client that the data does
+not support, whereas `NaN` lets the split criterion in §2.1 discover where those 1,930 clients
+actually belong.
+
+### 2.4 The API surface actually used
+
+`XGBClassifier` is the scikit-learn-compatible wrapper; internally it materialises a `QuantileDMatrix`
+for `hist`. Every estimator in this project is built by one factory, so no experiment can drift to
+a different configuration:
+
+```python
+def xgb_classifier(params=None, spw=1.0, early_stopping=True,
+                   enable_categorical=False, seed=SEED):
+    """XGBoost with the project's fixed infrastructure settings.
+
+    `early_stopping_rounds` and `eval_metric` go in the constructor, not `.fit()` --
+    the XGBoost 2.x/3.x API moved them. `enable_categorical` is pinned False because
+    xgboost 3.4 defaults it True and shap then refuses interventional TreeSHAP.
+    """
+    p = dict(XGB_FIXED)
+    p["enable_categorical"] = enable_categorical
+    p["random_state"] = seed
+    p["scale_pos_weight"] = spw
+    if early_stopping:
+        p["n_estimators"] = N_ESTIMATORS_CAP
+        p["early_stopping_rounds"] = ES_ROUNDS
+    if params:
+        p.update(params)
+    return XGBClassifier(**p)
+```
+
+Two version-specific details are worth recording, because both are silent failures rather than
+errors:
+
+**`early_stopping_rounds` and `eval_metric` moved to the constructor** in XGBoost 2.0. Passing
+them to `.fit()` on 3.4.1 raises `TypeError`; passing `eval_metric` only to `.fit()` on older
+tutorials' advice silently leaves the booster optimising the default metric.
+
+**`enable_categorical` now defaults to `True`.** `shap` 0.52 inspects that flag alone — not
+whether any column is actually of `category` dtype — and refuses interventional TreeSHAP with
+`NotImplementedError: Categorical split is not yet supported`. Every numeric model here pins it
+`False` explicitly. Only the `enable_categorical=True` arm of the encoding ablation (§4.4) sets
+it, and that arm is deliberately not the one explained with SHAP.
+
+`n_estimators` is never tuned. It is capped at 2,000 and decided by early stopping against an
+inner slice (§3.3), because the optimal number of rounds is a function of `eta` and therefore not
+independently searchable.
+
+---
+
+## 3. Solution — Part II: Experimental design and the leakage argument
+
+The 50-point Solution section rewards justified design choices, so each subsection below states a
+decision, the evidence for it, and what it rules out. Everything in §3 is binding on all fourteen
+experiments.
+
+### 3.1 De-duplication precedes splitting
+
+Phase 1 found 108 rows in 52 duplicate groups, 21 of them carrying **contradictory labels**
+(identical values across all 23 features, different outcomes). De-duplication therefore happens
+*before* the train/test split, not after. Had it happened after — or not at all — identical
+feature rows would straddle the boundary and the model would be scored partly on rows it had
+memorised. The contradictory groups also establish a small irreducible error floor, quantified in
+§5.6.
+
+### 3.2 Hold-out and cross-validation
+
+- **Hold-out:** 80/20 stratified on `DEFAULT`, `random_state=42` → 23,955 train / 5,989 test.
+  With 1,324 test positives the standard error on AUC is ≈0.007, tight enough to resolve the
+  differences this report claims.
+- **Tuning and model selection:** `StratifiedKFold(5, shuffle=True, random_state=42)` on the
+  training portion only.
+- **Variance reporting:** `RepeatedStratifiedKFold(5 splits × 5 repeats, random_state=7)`,
+  refitting only the *selected* configuration → 25 fits, reported as mean ± SD.
+
+The two random states are deliberately different. Reusing `42` for the variance folds would make
+them correlated with the folds the tuner selected against, so the reported SD would understate
+the true variability. Repeated CV is used for *reporting* and never inside the tuner, where it
+would cost 5× the runtime for a noisier selection signal.
+
+### 3.3 Early stopping without contamination
+
+Early stopping needs a validation signal, and the obvious sources are both wrong: the test set is
+leakage, and the CV validation fold is subtler leakage — the fold used to *score* a configuration
+must not also be the fold used to decide when to stop fitting it. The implementation carves a
+stratified **15% slice out of each training fold**:
+
+```python
+def fit_one(est, X_tr, y_tr, seed=SEED):
+    """Fit a single estimator, carving the early-stopping slice out of the training data.
+
+    The eval_set comes from an inner slice of this fold's *training* rows, so the outer
+    validation fold is never seen by early stopping and the test set never at all.
+    """
+    if _uses_early_stopping(est):
+        i_fit, i_es = train_test_split(
+            np.arange(len(y_tr)), test_size=ES_SLICE, stratify=y_tr, random_state=seed
+        )
+        est.fit(X_tr.iloc[i_fit], y_tr[i_fit],
+                eval_set=[(X_tr.iloc[i_es], y_tr[i_es])], verbose=False)
+    else:
+        est.fit(X_tr, y_tr)
+    return est
+```
+
+This function is the project's leakage boundary, and it exists in exactly one place. All fourteen
+experiments call `runner.cv_evaluate()`, which calls `fit_one()`; no experiment implements its own
+CV loop. Divergent evaluation loops are the single largest source of numbers that fail to
+reconcile across a multi-experiment study.
+
+### 3.4 Test-set discipline
+
+`src/data.py` exposes two separate accessors. `training_context()` returns *only* `X`, `y` and the
+fold objects; `test_context()` returns the hold-out. An experiment that never calls
+`test_context()` structurally cannot touch the test set. Only `exp14_final` (the test gate) and the
+two SHAP experiments — which *explain* held-out decisions without selecting anything — import it.
+This makes the audit a single grep, reported in §5.7.
+
+### 3.5 Threshold selection — the critical leakage point
+
+The most common fatal flaw in this kind of assignment is sweeping the decision threshold against
+test labels and reporting the best result. The procedure here is:
+
+1. Generate **out-of-fold** probabilities on the training portion via `cross_val_predict`.
+2. Minimise expected cost over a 501-point grid on *those* probabilities.
+3. **Freeze the winner as a scalar** and assert it lies in $(0,1)$.
+4. Apply the frozen scalar, unmodified, to the test set.
+
+The threshold is a hyperparameter like any other, so it is selected on training data. The test set
+sees one number it did not help choose. Relatedly, all decisions use
+`predict_proba(X)[:, 1] >= tau` and never `model.predict()`, which would silently reimpose 0.5.
+
+### 3.6 Why ROC-AUC is the tuning objective
+
+ROC-AUC is the declared primary metric, for three reasons. It is the standard in the credit
+scoring benchmark literature (Lessmann et al., 2015), making the numbers comparable outside this
+report. It is **prevalence-independent**, so it is comparable across the ladder of §5.1 and across
+the fairness subgroups of §5.6, where prevalence differs by construction. And it has lower
+fold-to-fold variance than PR-AUC, so a fixed trial budget resolves smaller differences. `aucpr`
+is logged every trial and reported, but not optimised.
+
+### 3.7 Why `scale_pos_weight` is excluded from the search space
+
+This is the subtlest design decision in the project and it is deliberate.
+
+ROC-AUC is invariant to any monotone transformation of the scores. `scale_pos_weight` rescales the
+gradients of the positive class, which shifts the *score scale* but leaves the *ranking* almost
+unchanged. A tuner optimising ROC-AUC is therefore nearly blind to it and would pick a value
+essentially at random — and that arbitrary value would then be confounded with every other
+hyperparameter in the same search.
+
+So `scale_pos_weight` is fixed *per arm*, and each arm is tuned independently. This converts the
+imbalance study (§5.3) from a confound into a controlled comparison. The corollary, and the point
+§5.3 makes empirically: reading "ROC-AUC barely moved when I set `scale_pos_weight`" as
+"reweighting worked" is backwards. It means the metric is insensitive to it.
+
+`max_delta_step` is mentioned and dismissed: it exists for extreme imbalance beyond roughly
+100:1, where the logistic Hessian underflows. At 3.52:1 it is unnecessary.
+
+### 3.8 How Phase 1 findings map to concrete choices
+
+| Phase 1 finding | Design consequence |
+|---|---|
+| `PAY_n` response non-monotonic, `0` is modal | Non-linear learner; native integer encoding, benchmarked in §4.4 rather than assumed |
+| Predictive strength rises with recency (ρ 0.143 → 0.292) | Six `PAY_n` kept distinct, not aggregated; recency ablation in §5.2 |
+| `BILL_AMT` VIF 13.9–25.7 | Columns **kept** — collinearity degrades attribution, not tree prediction. Caveats SHAP in §5.5 instead |
+| PCA rejected (all-14-PC AUC 0.713 < raw) | No dimensionality reduction anywhere in the pipeline |
+| Skewness up to 30.4 on monetary columns | **No scaling.** Trees are scale-invariant; §4.4 tests this rather than asserting it |
+| 22.11% prevalence | Accuracy reported only to discredit it (§5.1); PR-AUC and cost used instead |
+| 21 contradictory duplicate groups | Bayes floor quantified honestly in §5.6 |
+| Demographic disparities measured | Fairness check in §5.6 asks whether the model amplifies them |
+
+### 3.9 Statistical honesty
+
+Every metric is reported as mean ± SD over the 25 repeated-CV fits — SD, not standard error, so
+the number describes fold-to-fold variability rather than being artificially shrunk by $\sqrt{n}$.
+**No difference smaller than one fold-SD is bolded or described as an improvement**; several
+results in §5 are reported as indistinguishable for exactly this reason. DeLong's test (DeLong et
+al., 1988) is applied to exactly one class of comparison — paired, correlated ROC curves on the
+single hold-out set — and never across CV folds, where the samples are not independent. For
+arm-versus-arm comparisons, paired per-fold differences are used with the Nadeau & Bengio (2003)
+caveat noted: repeated-CV t-tests are anti-conservative because the folds overlap.
+
+---
+
+## 4. Solution — Part III: Tuning and encoding
+
+### 4.1 Search strategy
+
+Optuna's **TPE sampler** (`multivariate=True`) with a `MedianPruner` was used rather than grid or
+random search. Across eight dimensions a grid is infeasible — even three values per parameter is
+$3^8 = 6{,}561$ configurations — and random search needs roughly 3× the trials of TPE for
+equivalent quality because it does not exploit the structure it has already observed. The study
+is persisted to `artifacts/optuna_study.db`, so it resumes after interruption and so the
+optimisation history and fANOVA parameter importances are available for the appendix.
+
+**Deviation from plan, recorded honestly:** the plan budgeted 60–80 trials against an estimated
+15–30 s per trial. Measured cost was ~2.3 s per trial, because `hist` binning (§2.2) plus early
+stopping makes each 5-fold evaluation cheap. The budget was therefore raised to **150 trials**,
+of which 142 completed and 8 were pruned, in 1,166 s total. More TPE trials is strictly better,
+and the raise cost nothing that was budgeted elsewhere.
+
+### 4.2 The selected configuration, and what it reveals
+
+| Hyperparameter | Searched range | Selected |
+|---|---|---|
+| `max_depth` | 3–8 | **6** |
+| `eta` | 0.01–0.30 (log) | **0.0125** |
+| `min_child_weight` | 1.0–20.0 (log) | **4.19** |
+| `subsample` | 0.60–1.00 | **0.604** |
+| `colsample_bytree` | 0.50–1.00 | **0.800** |
+| `gamma` | 0.0–5.0 | **0.695** |
+| `reg_lambda` | 0.01–100 (log) | **34.3** |
+| `reg_alpha` | 0.001–10 (log) | **0.0015** |
+
+Three of these sit hard against a boundary, and the pattern is consistent and informative rather
+than incidental. `eta` = 0.0125 is at the *bottom* of its range, `subsample` = 0.604 is at the
+bottom of its range, and `reg_lambda` = 34.3 is high in a log-scaled range that reaches 100.
+Read together through the gain formula of §2.1, the tuner independently converged on a
+**slow-learning, heavily-regularised, high-variance-reduction** configuration: many small trees,
+each fitted to ~60% of the rows and 80% of the columns, with the $\lambda$ denominator
+aggressively discounting splits that rest on little Hessian mass.
+
+That is the signature of a problem with **modest signal relative to its noise**. A dataset with
+crisp separable structure tunes toward larger `eta` and weaker regularisation. This reading is
+not inferred from the hyperparameters alone — it is corroborated independently by the learning
+curve (Appendix A) and the small tuned-versus-untuned gap, and it is the foundation of the feature-set
+ceiling argument in §5.7.
+
+Note also that `reg_alpha` (L1) was driven to effectively zero while `reg_lambda` (L2) was driven
+high. With 23 dense, mostly-informative features there is nothing for L1 to sparsify; the useful
+regularisation is shrinkage of leaf weights, not elimination of them.
+
+**fANOVA parameter importance** (Appendix Figure A1b) ranks `subsample` first at 0.31 of the
+objective variance, then `reg_alpha` (0.18), `min_child_weight` (0.13), `gamma` (0.10) and
+`reg_lambda` (0.10), with **`max_depth` last at 0.04**. Two things are worth drawing out. The
+project plan predicted `min_child_weight` would be the highest-leverage parameter, on the
+Hessian-floor argument of §2.1; it placed third, so the prediction was directionally reasonable
+but not confirmed — recorded here rather than quietly dropped. And the parameters that matter are
+overwhelmingly the *variance-reduction* ones (`subsample`, the regularisers), not the
+*capacity* one (`max_depth`). The model is not capacity-limited on this dataset. It is
+noise-limited, which is the same conclusion §4.2 reached from the selected values and which §5.6
+reaches again from the learning curve.
+
+### 4.2.1 An honest caveat on how much tuning actually mattered
+
+The optimisation history (Appendix Figure A1a) qualifies the tuning gain in a way worth stating
+plainly. The best-so-far curve is essentially **flat after roughly trial 20**, and the *entire*
+150-trial search spans only 0.776 to 0.785 ROC-AUC — a range of ~0.009, which is **smaller than
+the 0.0107 pooled fold-SD**. In other words, once the configuration is anywhere inside a sensible
+search space, which specific point it lands on is not distinguishable from fold noise.
+
+This does not contradict the +0.0226 gain in §4.3, and the distinction matters. Library defaults
+sit *outside* this search space — 100 fixed rounds at `eta` = 0.3 with no early stopping — and
+that is where the real gain comes from: letting early stopping choose the number of rounds
+against a slow learning rate. The honest summary is therefore that **most of the tuning gain is
+bought by early stopping and a low `eta`, not by locating a precise optimum in eight
+dimensions.** The extra 130 trials beyond the first 20 bought nothing measurable. Reporting the
+gain without this caveat would overstate what the search achieved.
+
+### 4.3 Tuning gain
+
+| Configuration | ROC-AUC | PR-AUC | Brier |
+|---|---|---|---|
+| XGBoost, library defaults | 0.7619 ± 0.0080 | 0.5293 ± 0.0113 | 0.1415 ± 0.0026 |
+| **XGBoost, tuned** | **0.7845 ± 0.0071** | **0.5602 ± 0.0146** | **0.1348 ± 0.0041** |
+
+The gain is **+0.0226 ROC-AUC against a pooled fold-SD of 0.0107** — roughly 2.1 pooled SDs, so
+this one *is* a real improvement and is bolded accordingly. It is also the largest single gain
+anywhere in this project, and it improves all three metrics simultaneously: ranking (ROC-AUC),
+minority-class ranking (PR-AUC) and probability quality (Brier). Tuning is the highest-return
+activity in the study, which is worth stating because §5.3 will show that the much more commonly
+recommended intervention — reweighting for class imbalance — returns nothing.
+
+### 4.4 Encoding: tested, not assumed
+
+Phase 1 established that `PAY_n` is non-monotonic and categorical-ish, which is conventionally
+taken as an argument for one-hot encoding. That argument was tested rather than accepted.
+
+| Arm | Features | ROC-AUC |
+|---|---|---|
+| Native integers | 23 | 0.7845 ± 0.0071 |
+| One-hot `PAY_n` | 79 | 0.7837 ± 0.0089 |
+| `enable_categorical=True` | 23 | 0.7854 ± 0.0075 |
+| Signed-log monetary columns | 23 | 0.7845 ± 0.0071 |
+
+All four arms fall within 0.0017 of each other, against fold-SDs of ~0.008. **They are
+indistinguishable**, and no arm is bolded. **Native integers are carried forward** on three
+grounds. Trees make axis-aligned splits, so a non-monotonic response is recoverable by *stacked*
+splits (`PAY_0 < 0.5`, then `PAY_0 < -1.5`) — one-hot buys expressible functions that integers
+already reach, at a cost in depth only. Integers keep the six `PAY_n` columns distinct, which
+one-hot's 66 dummies fragment, protecting the recency gradient Phase 1 measured (ρ 0.143 →
+0.292). And 23 features rather than 79 keeps SHAP attributions readable, which matters directly
+for Q2.
+
+The signed-log arm is the cleanest result in the table: it scored **identically to native
+integers to four decimal places, 0.7845 ± 0.0071 on both**. That is not approximate agreement —
+monotone rescaling cannot change which rows fall either side of an axis-aligned split, so the
+fitted trees are the same trees. This empirically settles a Phase 1 recommendation: the advice to
+apply a robust scaler (skewness up to 30.4) was correct *for distance- and gradient-based
+learners*, and is simply inapplicable to this one. Scaling a tree model is a common and harmless
+error; asserting it was necessary would have been a real one.
+
+By the same logic, the `BILL_AMT1–6` columns are **kept** despite VIF 13.9–25.7. Collinearity
+inflates coefficient variance in a linear model, but trees have no coefficients. What
+collinearity does damage here is *attribution* — SHAP divides credit arbitrarily among
+interchangeable columns — which is a §5.5 caveat, not a reason to discard predictive signal.
+
+---
+
+## 5. Key results and metrics
+
+Every number below is read programmatically from `results/*.json` by `src/report.py`; none is
+retyped from a notebook cell. All CV figures are mean ± SD over the same 25 repeated-CV fits, so
+rows are directly comparable. Per §3.9, differences smaller than one fold-SD are stated as
+indistinguishable and are not bolded.
+
+### 5.1 The complexity ladder — answering Q1
+
+**Table 1.** Eight rungs, each adding capability at a measurable cost in readability. "Cost to
+read" is the number of parameters, rules or nodes a human must read to reproduce one decision.
+
+| Rung | Model | Feat. | ROC-AUC | PR-AUC | Brier | Acc @0.5 | Recall @0.5 | Cost to read |
+|---|---|---|---|---|---|---|---|---|
+| 0 | Majority class | 23 | 0.5000 ± 0.0000 | 0.2212 | 0.2212 | 0.7788 | 0.0000 | 1 |
+| 1 | `PAY_0`, depth-1 tree | 1 | 0.6441 ± 0.0075 | 0.3774 | 0.1460 | 0.8197 | 0.3292 | 1 |
+| 1b | `PAY_0` as a raw score | 1 | 0.6910 ± 0.0083 | 0.4394 | — | — | — | 1 |
+| 2 | Logistic regression | 23 | 0.7248 ± 0.0086 | 0.5034 | 0.1448 | 0.8094 | 0.2374 | 24 |
+| 3 | Decision tree (depth-tuned) | 23 | 0.7542 ± 0.0103 | 0.5062 | 0.1383 | 0.8195 | 0.3522 | 109 |
+| 4 | Random forest | 23 | 0.7641 ± 0.0096 | 0.5374 | 0.1384 | 0.8183 | 0.3769 | 692,674 |
+| 5 | XGBoost, defaults | 23 | 0.7619 ± 0.0080 | 0.5293 | 0.1415 | 0.8185 | 0.3701 | 100 |
+| 6 | **XGBoost, tuned** | 23 | **0.7845 ± 0.0071** | **0.5602** | **0.1348** | 0.8195 | 0.3381 | 499 |
+
+Rungs 2 and 3 are **untuned internal reference implementations**, present only to locate XGBoost
+on a capability axis. They are not my teammates' tuned Decision Tree and Logistic Regression
+submissions and must not be compared against them.
+
+#### The accuracy trap, in one column
+
+Rung 0 predicts "no default" for every client and scores **77.88% accuracy with zero recall** —
+it is exactly $1 - 0.2211$, the majority-class rate. More damning is the `Acc @0.5` column read
+downward: from rung 1 to rung 6 accuracy moves only between **0.8094 and 0.8197**, a span of one
+percentage point, while ROC-AUC moves from 0.6441 to 0.7845. **Accuracy cannot distinguish a
+one-line rule from a tuned ensemble on this dataset.** Any report leading with accuracy here
+would be reporting noise. This is why §3.6 selects ROC-AUC and §5.4 optimises expected cost.
+
+#### Recovering the lost Phase 1 benchmark
+
+The Phase 1 proposal reported a `PAY_0`-alone ROC-AUC of **0.690**, from a notebook that was
+never committed (§2.2 of the plan). Rung 1 — a depth-1 tree on `PAY_0` — reaches only
+**0.6441**, well short of it. The discrepancy turned out to be informative rather than an error.
+
+A single split *binarises* `PAY_0` into two groups and throws away its ordinal gradient. Ranking
+clients on the raw code, **with no model fitted at all**, is rung 1b, and it scores
+**0.6910 ± 0.0083** — recovering the 0.690 benchmark to within 0.001. The benchmark was never a
+decision rule; it was a ranking.
+
+The **+0.0469** between rungs 1 and 1b is therefore not a modelling gain. It is the **measured
+price of insisting on a single readable rule**, over six fold-SDs wide, and it is the first rung
+of the interpretability cost this experiment exists to quantify. Both rungs cost exactly 1 to
+read; one is a rule you can state in a sentence, the other a ranking you cannot.
+
+#### What each increment actually buys
+
+| Increment | Δ ROC-AUC | Reading |
+|---|---|---|
+| Majority → one rule on `PAY_0` | +0.1441 | One column carries most of the available signal |
+| One rule → rank on the raw code | +0.0469 | The price of a *readable* rule (§ above) |
+| `PAY_0` score → linear, 23 features | +0.0338 | What 22 more features buy a linear model |
+| Linear → single tree | +0.0294 | What non-linearity and interactions buy |
+| Single tree → random forest | +0.0099 | What bagging buys — barely one fold-SD |
+| Forest → tuned XGBoost | +0.0204 | What boosting plus tuning buys beyond bagging |
+| **One readable rule → tuned XGBoost** | **+0.1404** | The total on offer for abandoning direct interpretability |
+
+Two honest qualifications. **Untuned XGBoost (0.7619) does not beat the random forest (0.7641).**
+The forest is nominally ahead by 0.0022, which is well inside one fold-SD, so the correct
+statement is that they are **indistinguishable** — boosting at library defaults buys nothing over
+bagging, and the entire XGBoost advantage here is a *tuning* advantage, not an architectural one.
+This is not the result the method section would have predicted and it is reported unbolded.
+
+Second, the interpretability cost column is where the forest loses decisively. It reaches its
+0.7641 using **692,674 nodes across 100 unconstrained trees**; tuned XGBoost reaches a higher
+0.7845 using **499**. On a pure capability-per-unit-of-opacity basis the boosted model is three
+orders of magnitude more efficient, which is the trade-off Figure 1b makes visible and is a
+stronger argument for XGBoost than its ROC-AUC alone.
+
+![Complexity ladder](../figures/p2_fig1_complexity_ladder.png)
+
+**Figure 1.** Left: ROC-AUC per rung, mean ± SD over 25 repeated-CV fits, with the single-rule
+benchmark marked. Right: the same scores against interpretability cost on a log axis — the
+trade-off as a measured surface rather than an assertion.
+
+#### The answer to Q1
+
+> *Does the marginal performance gain achieved by ensemble architectures and non-linear models
+> justify the corresponding loss in direct rule-based interpretability?*
+
+Quantified: moving from one readable rule to tuned XGBoost buys **+0.1404 ROC-AUC** (0.6441 →
+0.7845) and costs a rise in reading burden from **1 to 499**. PR-AUC, the metric that matters at
+22% prevalence, rises from 0.3774 to 0.5602 — a **48% relative improvement** in ranking the
+minority class.
+
+On the evidence here the gain **is** justified, but the justification is conditional and the
+condition is Q2. The gain is real and far larger than fold noise, and §5.4 converts it into
+money. But a lender cannot deploy a 499-node model on the strength of an AUC alone — adverse
+action notices require a reason per decision. So the honest answer to Q1 is that the trade is
+worth making *only if* the post-hoc explanation is trustworthy, which is precisely what §5.5
+tests rather than assumes.
+
+Note also that the single most valuable step on the whole ladder is the *first* one: `PAY_0`
+alone, at a reading cost of 1, delivers 0.6910 of the 0.7845 eventually achieved. Everything the
+remaining 22 features and 498 nodes contribute is the last +0.0935. A report claiming XGBoost
+"solved" this problem would be ignoring that most of the signal was legible from the start.
+
+![ROC and PR on the hold-out](../figures/p2_fig2_roc_pr.png)
+
+**Figure 2.** Hold-out ROC and precision–recall for the tuned model against two ladder
+baselines. The single rule is drawn as its *attainable* operating points rather than a curve:
+with two distinct scores it has one usable point, and joining them would interpolate through
+pairs the rule cannot reach. That point (recall 0.33, precision 0.70) sits on the tuned curve —
+the rule is competitive exactly there and nowhere else, which is the operating-point rigidity
+§5.4 makes expensive.
+
+### 5.2 Feature studies
+
+#### Engineered features — a Phase 1 prediction, tested
+
+Phase 1 §2.2.2 committed to *benchmarking* aggregate features rather than assuming they help, and
+predicted that aggregation might **lose** signal by collapsing the recency gradient. The
+`engineer()` function adds 17 derived columns (six utilisation ratios, six repayment ratios, and
+`N_DELINQ`, `MAX_DELINQ`, `DELINQ_TREND`, `BILL_TREND`, `MONTHS_DORMANT`).
+
+| Arm | Features | ROC-AUC | Δ vs raw |
+|---|---|---|---|
+| Raw 23 | 23 | 0.7845 ± 0.0071 | — |
+| Raw + engineered | 40 | 0.7880 ± 0.0073 | +0.0035 |
+| **Engineered only** | 17 | **0.7786 ± 0.0075** | **−0.0059** |
+| RFE top 23 of 40 | 23 | 0.7869 ± 0.0073 | +0.0024 |
+
+The Phase 1 prediction is **confirmed in the form that tests it**. Replacing the raw columns with
+aggregates costs 0.0059 ROC-AUC: `N_DELINQ` and `MAX_DELINQ` compress six ordered monthly states
+into order-free summaries, and the recency information is destroyed rather than condensed.
+Adding the aggregates *alongside* the raw columns gains +0.0035, which is **less than one fold-SD
+(0.0073) and therefore not a distinguishable improvement** — it is not bolded and the raw 23 are
+carried forward. Seventeen extra columns that do not measurably improve ranking are seventeen
+extra columns of SHAP attribution to explain, which is a real cost under Q2.
+
+RFE is the quiet confirmation: allowed to choose any 23 of the 40, it kept **five of the six raw
+`PAY_n` columns** (all but `PAY_5`) and **all six raw `PAY_AMT` columns**, while discarding
+**five of the six `PAY_RATIO` aggregates** and half the `UTIL` block. Given a free choice between
+an aggregate and the raw ingredients it was built from, the selector took the ingredients.
+
+#### Where the signal actually lives
+
+Eleven arms, leave-one-group-out above and only-one-group below.
+
+| Arm | Features | ROC-AUC | Δ vs all |
+|---|---|---|---|
+| All groups | 23 | 0.7845 ± 0.0071 | — |
+| Drop demographic | 19 | 0.7832 ± 0.0075 | −0.0013 |
+| Drop `LIMIT_BAL` | 22 | 0.7769 ± 0.0079 | −0.0076 |
+| **Drop pay status** | 17 | **0.7374 ± 0.0075** | **−0.0471** |
+| Drop bill amounts | 17 | 0.7781 ± 0.0076 | −0.0064 |
+| Drop payment amounts | 17 | 0.7824 ± 0.0086 | −0.0021 |
+| Only demographic | 4 | 0.5646 ± 0.0086 | −0.2199 |
+| Only `LIMIT_BAL` | 1 | 0.6175 ± 0.0095 | −0.1670 |
+| **Only pay status** | 6 | **0.7492 ± 0.0080** | **−0.0353** |
+| Only bill amounts | 6 | 0.6331 ± 0.0112 | −0.1514 |
+| Only payment amounts | 6 | 0.6863 ± 0.0065 | −0.0982 |
+
+Three results carry into later sections.
+
+**Repayment status dominates, confirming Phase 1.** Dropping the six `PAY_n` columns costs
+0.0471 — more than six fold-SDs, and by far the largest effect measured anywhere in this project.
+Conversely those six columns *alone* reach 0.7492, which is **95.5% of the full model's ROC-AUC
+from 26% of its features**. Every other group is close to redundant given repayment status.
+
+**Demographics contribute essentially nothing.** Removing `SEX`, `EDUCATION`, `MARRIAGE` and
+`AGE` costs 0.0013 — well inside one fold-SD, so the full and no-demographics models are **not
+distinguishable**. On their own those four columns reach 0.5646, barely above the 0.5 of a coin
+toss. This is the single most important input to the fairness analysis (§5.6): because dropping
+the demographic columns is free in accuracy terms, the interesting question is not whether we
+*can* drop them but whether dropping them actually removes their influence. Phase 1's research
+angle anticipated exactly this.
+
+**Bill amounts are individually weak but not worthless.** Dropping all six costs only 0.0064,
+yet alone they reach 0.6331. This is the collinearity of §4.4 showing up as redundancy: the six
+columns carry largely the same information as each other and much of it is recoverable from
+`LIMIT_BAL` and the payment amounts. It is also advance warning for §5.5 — a feature group that
+is collectively informative but individually substitutable is exactly the configuration in which
+SHAP attributions become unstable.
+
+#### How much history does a lender actually need?
+
+The recency ablation keeps only the most recent *k* months, in `PAY_CHRONO` order. It answers a
+question a lender would genuinely ask, since every extra month of history is a data-retention and
+collection cost.
+
+| History retained | Features | ROC-AUC | Marginal gain |
+|---|---|---|---|
+| 1 month (September only) | 8 | 0.7669 ± 0.0084 | — |
+| 2 months | 11 | 0.7743 ± 0.0083 | +0.0073 |
+| 3 months | 14 | 0.7786 ± 0.0077 | +0.0044 |
+| 4 months | 17 | 0.7828 ± 0.0081 | +0.0041 |
+| 5 months | 20 | 0.7842 ± 0.0077 | +0.0014 |
+| 6 months (all) | 23 | 0.7833 ± 0.0069 | −0.0008 |
+
+**A single month of history reaches 0.7669 against 0.7833 for all six** — five additional months
+buy +0.0164 in total, roughly two fold-SDs, and the marginal gain decays monotonically to
+*negative* at the sixth. **k = 3 is the smallest window landing within one fold-SD of the full
+six**, so on this evidence a lender could halve its history requirement for no measurable loss in
+ranking quality. This is the Phase 1 recency gradient (Spearman ρ rising 0.143 → 0.292 from
+April to September) restated as an operational cost.
+
+A methodological note on the last row. The 6-month arm uses the same 23 features as the baseline
+yet scores 0.7833 against the baseline's 0.7845. The two are not a contradiction: this arm feeds
+the columns in *chronological* order, and because `colsample_bytree` = 0.80 samples columns by
+index, a reordering changes which subsets each tree sees and therefore fits a different model.
+The 0.0012 difference is well inside fold noise, but it is a useful reminder that column order is
+not inert once column subsampling is switched on.
+
+### 5.3 Class imbalance
+
+At 22.11% prevalence the dataset is mildly imbalanced — enough to break accuracy (§5.1), not
+enough to break learning. Four arms were run, each tuned independently under the protocol of
+§3.7 so that the comparison is controlled rather than confounded.
+
+**Table 2 — Imbalance strategies, 25 repeated-CV fits, thresholds frozen on out-of-fold
+training predictions at r = 6.**
+
+| Arm | Strategy | `spw` | τ | ROC-AUC | PR-AUC | Brier | Recall | Precision | OOF cost (r=6) |
+|---|---|---|---|---|---|---|---|---|---|
+| A | baseline, default threshold | 1.00 | 0.500 | 0.7845 ± 0.0071 | 0.5602 | **0.1348** | 0.357 | 0.678 | 21,331 |
+| B | **A's model, threshold moved** | 1.00 | 0.134 | 0.7845 ± 0.0071 | 0.5602 | **0.1348** | 0.829 | 0.333 | 14,239 |
+| C | reweighted, default threshold | 3.52 | 0.500 | 0.7848 ± 0.0074 | 0.5581 | 0.1801 | 0.634 | 0.469 | 15,431 |
+| C′ | reweighted, threshold moved | 3.52 | 0.358 | 0.7848 ± 0.0074 | 0.5581 | 0.1801 | 0.819 | 0.339 | **14,215** |
+| D | SMOTE inside the fold | 1.00 | 0.472 | 0.7681 ± 0.0088 | 0.5218 | 0.2200 | 0.811 | 0.324 | 14,952 |
+
+Arms A and B share one fitted model and differ only in the number they compare against, so
+their ranking and calibration columns are identical by construction. That is the point of
+listing them separately.
+
+**Reweighting does not improve ranking.** A → C moves ROC-AUC by **+0.0003** against a fold-SD
+of 0.0071 — one twenty-third of a standard deviation. Per §3.9 this is not an improvement and
+is not bolded. PR-AUC moves *down* by 0.0021. The result is not a failure of the experiment;
+it is the expected behaviour of a metric that is invariant to monotone transformations of the
+score, and `scale_pos_weight` is close to one such transformation.
+
+**Reweighting does measurably damage calibration.** Brier rises from **0.1348 to 0.1801**, a
+34% degradation, because multiplying the positive-class gradient inflates every predicted
+probability without changing the rate at which defaults actually occur. Arm C at τ = 0.5 reaches
+recall 0.634 — sitting between A's 0.357 and B's 0.829 — which is the mechanism stated plainly:
+**reweighting is threshold-moving, performed indirectly and with the probabilities damaged on
+the way through.**
+
+**The two routes arrive at the same place, and one of them arrives clean.** Once C's threshold
+is *also* re-tuned (arm C′), its OOF cost is **14,215** against B's **14,239** — a 0.17%
+difference, decisively inside noise. Two parameterisations, one destination. The tiebreak is
+not performance but what survives the trip: arm B still emits probabilities that mean what they
+say, and §5.4's cost analysis consumes probabilities.
+
+There is a sharper piece of evidence for that claim. Elkan's analytic optimum at r = 6 is
+*p*\* = 1/7 = **0.1429**. Arm B's empirically cost-minimising OOF threshold is **0.1341** — 0.009
+away. Arm C's is **0.3580**, two and a half times higher. A well-calibrated model's empirical
+optimum should land on the analytic one; arm C's does not, which is calibration damage showing
+up as a displaced operating point rather than as an abstract score.
+
+**SMOTE is rejected, on grounds specific to this dataset.** It is the only arm that loses real
+ranking quality: **0.7681, −0.0164 against A**, or 2.3 fold-SD, with the worst Brier in the
+table at 0.2200. The mechanism is semantic rather than statistical. SMOTE interpolates between
+neighbouring clients, so averaging a client at `PAY_0 = 0` with one at `PAY_0 = 1` yields
+`PAY_0 = 0.37` — a repayment code that does not exist in the coding scheme, placed in the
+interval where Phase 1 measured the response to be non-monotonic (§3.8). The synthetic rows are
+not merely noisy; they are drawn from a region where the feature has no meaning. Oversampling
+was nonetheless run rather than dismissed on principle, because a rejection backed by a measured
+row is worth more than an assertion.
+
+`max_delta_step` was considered and dismissed in the same spirit: it exists for imbalance beyond
+roughly 100:1, where the logistic Hessian underflows. At 3.5:1 it addresses a problem this
+dataset does not have.
+
+**Arm B is carried forward.** It matches the best cost in the table, preserves calibration, and
+requires changing exactly one scalar rather than retraining.
+
+### 5.4 Calibration and cost-sensitive thresholds
+
+A threshold is only meaningful if the probabilities it is applied to mean something. This
+section establishes that they do, then uses them.
+
+#### Calibration
+
+Each fold's training half is split again, 80/20, so the calibrator is fitted on rows the
+booster did not train on and the fold's validation rows stay unseen. Expected calibration error
+(ECE) is the *n*-weighted mean gap between predicted probability and observed frequency over ten
+equal-width bins.
+
+| Arm | Method | Brier | ECE | Mean predicted *p* |
+|---|---|---|---|---|
+| A (`spw`=1) | raw | 0.1356 | 0.0212 | 0.2189 |
+| A | Platt (sigmoid) | 0.1349 | 0.0191 | 0.2217 |
+| A | isotonic | 0.1349 | 0.0102 | 0.2218 |
+| C (`spw`=3.52) | raw | 0.1812 | **0.2088** | **0.4299** |
+| C | Platt (sigmoid) | 0.1346 | 0.0115 | 0.2218 |
+| C | isotonic | 0.1348 | **0.0080** | 0.2217 |
+
+Observed prevalence is 0.2212.
+
+**The untouched model is already close to calibrated.** Arm A's mean predicted probability is
+0.2189 against a base rate of 0.2212 — 0.0023 apart — with ECE 2.1%. Boosted trees are often
+systematically distorted (Niculescu-Mizil & Caruana, 2005); minimising log-loss with the
+regularisation of §4.2 has left this one in reasonable shape without help.
+
+**The reweighted model is not, and the failure is exactly the predicted one.** Arm C's mean
+prediction is **0.4299** against the same 0.2212 base rate. It is not mis-ranking clients — §5.3
+showed its ROC-AUC is identical — it is asserting that 43% of the book will default when 22%
+will. ECE of 0.2088 means the average prediction is wrong by 21 percentage points in level.
+
+**Post-hoc calibration repairs the damage completely.** Platt scaling pulls arm C's ECE from
+0.2088 to 0.0115 and its Brier from 0.1812 to 0.1346, landing it on top of arm A. So reweighting
+is recoverable — but the cheaper course is not to cause the problem: arm B reaches the same
+place by changing one scalar, with no second model to fit, validate and maintain. Among the
+calibrated variants nothing separates (Brier 0.1346–0.1349, a 0.0003 spread), so none is bolded
+as a winner; isotonic gives the best ECE at 0.0080 and is the variant carried into the sweep
+below as a calibration reference.
+
+![Reliability and Brier](../figures/p2_fig3_reliability.png)
+
+**Figure 3.** Reweighting leaves ranking alone and damages calibration. The `spw = 3.52` curve
+sits far below the diagonal at every bin — systematic over-prediction — for a tenfold rise in
+ECE, while isotonic recalibration of the `spw = 1` model returns it to the diagonal.
+
+#### Cost-sensitive thresholds
+
+The cost ratio is anchored rather than assumed. A false negative costs LGD × EAD, the
+unrecovered balance, with retail-unsecured LGD ≈ **0.70**. A false positive costs the forgone
+net interest margin on a customer who would have repaid, NIM ≈ **0.12**. That gives
+r = 0.70/0.12 = **5.83**, reported as **6:1**.
+
+**Table 3 — Cost sweep on out-of-fold training predictions. τ is the empirical cost-minimising
+threshold; *p*\* is Elkan's analytic optimum 1/(1+r).**
+
+| r | Elkan *p*\* | Empirical τ | τ − *p*\* | Min cost | Cost at τ = 0.5 | Saving | Recall | Precision |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 0.5000 | 0.5360 | +0.0360 | 4,286 | 4,306 | 20 | 0.335 | 0.699 |
+| 2 | 0.3333 | 0.3180 | −0.0153 | 7,189 | 7,711 | 522 | 0.529 | 0.561 |
+| 5 | 0.1667 | 0.1781 | +0.0114 | 12,978 | 17,926 | 4,948 | 0.719 | 0.408 |
+| **6** | **0.1429** | **0.1341** | **−0.0088** | **14,239** | **21,331** | **7,092** | **0.829** | **0.333** |
+| 10 | 0.0909 | 0.0841 | −0.0068 | 16,575 | 34,951 | 18,376 | 0.947 | 0.267 |
+| 20 | 0.0476 | 0.0541 | +0.0065 | 18,058 | 69,001 | 50,943 | 0.990 | 0.236 |
+
+**The empirical optimum tracks the analytic curve, which is the strongest calibration evidence
+in this report.** Elkan's formula is derived under the assumption that the classifier emits true
+posterior probabilities; it says nothing about a model that merely ranks. Across the whole sweep
+the mean absolute deviation between the empirically chosen τ and 1/(1+r) is **0.0141** on raw
+probabilities, and **0.0079** after isotonic calibration. Calibrating tightens the agreement,
+which is the direction that confirms the mechanism rather than merely being consistent with it.
+Two independent lines — a Brier/ECE measurement and a threshold-location argument — reach the
+same conclusion, and the sign of the calibration effect links them.
+
+**The threshold is where the money is.** At the headline r = 6 the frozen τ = 0.1341 costs
+14,239 against 21,331 at the default 0.5 — a **33.2% reduction in expected loss from changing
+one number**, with the model untouched. For comparison, the entire 150-trial hyperparameter
+search bought +0.0226 ROC-AUC (§4.3). Selecting an operating point is not a formality appended
+to modelling; on this problem it is worth more than the modelling.
+
+**The saving grows superlinearly in r**, from 20 units at r = 1 to 50,943 at r = 20, because
+τ = 0.5 becomes progressively more wrong as the cost asymmetry widens while the cost-optimal
+rule tracks it. A lender that adopts a model but leaves the threshold at its library default
+has captured almost none of the available value.
+
+**Instance-weighted costing moves the optimum, and the direction is informative.** Charging each
+error against the client's `LIMIT_BAL` as an EAD proxy — so a missed default on a NT$500,000
+limit costs more than one on NT$20,000 — selects **τ = 0.1621** rather than 0.1341, and cuts
+cost from NT$360.3M at τ = 0.5 to **NT$259.5M**. The shift is *upward*, which is initially
+counter-intuitive: if large exposures dominate the loss, one expects to decline more freely, not
+less. The explanation is that limit and risk are negatively related in this book — default rate
+falls from **31.8% in the lowest limit quintile to 13.7% in the highest** (Spearman ρ = −0.170)
+— so the marginal applicants added by lowering the threshold are disproportionately large-limit,
+low-risk customers whose forgone margin is expensive. Exposure weighting therefore penalises
+over-rejection more than flat counting does. Both schemes are reported; the flat threshold is
+the one frozen and carried to §5.7, because it is the one the cost matrix of §3 defines.
+
+Unlike the flat scheme, the instance-weighted optimum does not move with r: `cost_at_threshold`
+applies LGD and NIM per client directly, so r is already embedded in their ratio and the sweep
+reproduces one answer at every rung. The single value is reported rather than six identical ones.
+
+The proposal's 9.8-million-customer and NT$1.17bn figures are **motivation for caring about cost
+asymmetry at all**. They are not presented as a result of this model, and no per-customer saving
+is extrapolated from a 5,989-row hold-out.
+
+![Cost against threshold](../figures/p2_fig4_cost_threshold.png)
+
+**Figure 4.** Left: out-of-fold cost against decision threshold for each cost ratio, each curve
+scaled to its own maximum so the shapes are comparable; dots mark the empirical minimum. Right:
+those minima against Elkan's analytic optimum p\* = 1/(1+r). The empirical points track the
+analytic curve closely, and calibrating first tightens the agreement — which is the confirming
+direction, since the formula assumes calibrated probabilities.
+
+### 5.5 SHAP — answering Q2
+
+Q2 asks whether post-hoc explainability can supply *regulatory-compliant decision
+auditability* for a non-linear ensemble. That is not one question but three, and they have to
+be answered in order: are the explanations **exact**, are they **reproducible**, and are they
+**true of the data** rather than merely true of the model. TreeSHAP is run with
+`feature_perturbation="interventional"` against a 1,000-row stratified background from the
+training portion, and explanations are computed on a 2,000-row stratified sample of the
+**held-out** set — explaining decisions the model has never seen is the whole auditability
+argument.
+
+**Exactness.** SHAP values are computed in log-odds (margin) space, where the additive
+decomposition is exact rather than approximate. Summed against the constant base value they
+reconstruct the model margin to a maximum error of **3.7 × 10⁻⁶** over 2,000 rows × 23
+features, which is float32 accumulation noise, not method error. Switching to the
+`tree_path_dependent` estimator changes the mean|SHAP| ordering only slightly (Spearman
+ρ = 0.973), so the background-sampling choice is not driving the conclusions.
+
+**Table 4 — Top ten features by mean|SHAP|, with cross-measure ranks.**
+
+| # | Feature | mean\|SHAP\| (log-odds) | Share of total | Rank by `gain` | Rank by permutation | Rank SD over 5 seeds |
+|---|---|---|---|---|---|---|
+| 1 | `PAY_0` | 0.3780 | 22.3% | 1 | 1 | 0.00 |
+| 2 | `LIMIT_BAL` | 0.2078 | 12.3% | 8 | 2 | 0.00 |
+| 3 | `BILL_AMT1` | 0.1254 | 7.4% | 10 | 3 | 0.45 |
+| 4 | `PAY_AMT2` | 0.1087 | 6.4% | 7 | **22** | 0.55 |
+| 5 | `PAY_AMT1` | 0.0966 | 5.7% | 9 | 16 | 1.41 |
+| 6 | `PAY_2` | 0.0907 | 5.3% | 2 | 11 | 1.10 |
+| 7 | `PAY_3` | 0.0837 | 4.9% | 3 | 9 | 1.00 |
+| 8 | `PAY_AMT3` | 0.0816 | 4.8% | 11 | 8 | 0.55 |
+| 9 | `PAY_4` | 0.0609 | 3.6% | 4 | 5 | 0.55 |
+| 10 | `PAY_AMT6` | 0.0524 | 3.1% | 15 | **23** | 2.77 |
+
+mean|SHAP| and share of total are from the 2,000-row held-out sample; the three right-hand
+columns are from the five-seed stability study, which re-explains a 1,000-row sample, so its
+own SHAP ordering differs from this one by a position or two in the middle of the table.
+
+**One feature carries a fifth of every decision.** `PAY_0` alone accounts for **22.3%** of
+total attribution, and the six repayment-status columns together carry **40.2%** against
+**16.5%** for the six `BILL_AMT` columns. This is the §5.2 ablation result arrived at by a
+completely different route — there by deletion, here by attribution — and the two agree.
+
+**Convergent validation: the model independently recovers the Phase 1 anomaly.** Phase 1
+measured a non-monotonic default rate across `PAY_0` codes, with clients who paid *in full*
+(code −1) defaulting *more* often than clients revolving a balance (code 0). The model was
+never told `PAY_n` is ordinal, let alone which direction it runs. Averaging SHAP values within
+each code reproduces the shape from the model's internals:
+
+| `PAY_0` | Reading | *n* | Mean SHAP (log-odds) | Observed default rate |
+|---|---|---|---|---|
+| −2 | dormant | 191 | −0.214 | 12.6% |
+| −1 | paid in full | 398 | −0.165 | 16.6% |
+| 0 | revolving | 965 | **−0.288** | 13.7% |
+| 1 | one month late | 235 | +0.250 | 32.8% |
+| 2 | two months late | 181 | +1.517 | 67.4% |
+| 3 | three months late | 22 | +1.365 | 77.3% |
+
+The dip is there: code 0 receives the *most negative* contribution of any code, more negative
+than "paid in full", exactly inverting the intuitive ordering and matching what the raw rates
+do. The sign flips between 0 and 1, and the jump from code 1 to code 2 is +1.27 log-odds —
+the single largest movement any feature value produces in the model. Across the six codes with
+*n* ≥ 20 the rank correlation between mean SHAP and observed default rate is **ρ = 0.886**
+(ρ = 0.700 including the three codes with *n* ≤ 6, where a single client sets the rate). A
+post-hoc explanation that recovers a documented data anomaly the model was never given is the
+strongest available evidence that the explanation describes something real.
+
+**Reproducibility, which is what "audit trail" actually requires.** An explanation that
+reorders when the seed changes cannot be put in front of a regulator. Refitting with five seeds
+and re-explaining each fit, pairwise Spearman ρ between mean|SHAP| vectors averages **0.9375**
+(minimum 0.8735) and the top-10 Jaccard index averages **0.8727** (minimum 0.8182) — so on the
+worst pair, eight of ten features in the top ten are shared. `PAY_0` and `LIMIT_BAL` never move
+at all (rank SD 0.00). Where instability appears it is concentrated where §5.2 predicted:
+mean rank SD is **1.73 positions across `BILL_AMT1–6` against 1.16 for everything else**. The
+VIF 13.9–25.7 collinearity documented in Phase 1 surfaces as attribution instability rather
+than as a prediction problem, which is precisely why the columns are kept (§3.8) but must be
+read as a group total rather than individually.
+
+**The importance measures disagree, and the disagreement is informative.** Ranking the 23
+features by five different measures gives five different answers:
+
+| Pair | Spearman ρ |
+|---|---|
+| SHAP vs `gain` | 0.873 |
+| SHAP vs `total_gain` | 0.844 |
+| SHAP vs permutation | 0.585 |
+| `gain` vs `weight` | −0.220 |
+| `cover` vs `weight` | **−0.526** |
+
+`weight` counts how often a feature is split on, which rewards high-cardinality continuous
+columns whether or not the splits matter — it ranks `BILL_AMT1` first and `PAY_0` **twelfth**,
+a conclusion no other measure supports. `gain` and `cover` are computed from training-loss
+reduction and tree structure, not held-out behaviour. SHAP and permutation importance are
+preferred here because both are evaluated on unseen rows and both answer a question about
+*predictions* rather than about tree geometry. Their own ρ of 0.585 is a genuine caveat: the
+`PAY_AMT` columns rank high by SHAP and low by permutation (Table 4), which is the expected
+signature of substitutable features — permuting one lets the others absorb its role, while SHAP
+splits credit between them.
+
+**Verdict on Q2: yes, with a stated scope.** The explanations are exact to float precision,
+stable to ρ ≈ 0.94 under reseeding, and independently recover a known property of the data.
+That is enough to answer *"why was this applicant declined"* for a specific decision, with a
+signed contribution per feature that sums to the score — which is what auditability demands.
+Two limits must travel with that claim. First, SHAP attributes the **model's output, not a
+causal mechanism**: it answers "why did this model decide that", not "what would happen if the
+applicant's limit were raised". Second, within the collinear `BILL_AMT` block individual
+attributions are unstable and only the group total is defensible. Neither limit is fatal for
+audit, but both belong in any document that accompanies the model.
+
+Figure 5 is the beeswarm; Figure 6 is the `PAY_0` dependence plot coloured by `PAY_2`, showing
+the same profile as the table above at the level of individual clients. Appendix A carries the
+waterfall pair: a correctly identified default at *p* = 0.856 and — more usefully — a **missed**
+default at *p* = 0.035, where the explanation shows the model was misled by an entirely
+unremarkable repayment history.
+
+![SHAP beeswarm](../figures/p2_fig5_shap_beeswarm.png)
+
+**Figure 5.** TreeSHAP beeswarm on held-out rows, log-odds space, interventional perturbation
+against a 1,000-row stratified background. One point per client per feature; colour is the
+feature value.
+
+![PAY_0 dependence](../figures/p2_fig6_shap_pay0_dependence.png)
+
+**Figure 6.** Left: SHAP value for `PAY_0` against its value, coloured by `PAY_2`. Right: mean
+SHAP per repayment code against the observed default rate for that code. The model's internal
+response reproduces the Phase 1 non-monotonicity — including the dip at code 0 — without ever
+being told about it. Codes holding fewer than 20 clients are faded.
+
+### 5.6 Fairness
+
+Phase 1 quantified demographic default-rate disparities and committed to a later fairness check
+on the grounds that *"quantifying them before modelling begins is what makes a later fairness
+check interpretable rather than merely alarming."* This section discharges that commitment. The
+question is not whether disparities exist in the output — they will, because they exist in the
+data — but whether the model **amplifies, preserves or attenuates** them.
+
+Metrics are computed on out-of-fold training predictions at the frozen τ = 0.1341. Nothing is
+selected here and the hold-out is untouched; OOF also gives subgroup samples roughly four times
+larger than the hold-out would, so the Wilson intervals are tighter.
+
+**Table 5 — Subgroup summary. Selection rate is the fraction of each group flagged as likely to
+default; the four-fifths rule treats a ratio below 0.80 as adverse impact.**
+
+| Attribute | Groups | Observed rate gap | Selection ratio, full | Selection ratio, no demographics | ROC-AUC gap | Recall gap |
+|---|---|---|---|---|---|---|
+| `SEX` | 2 | 3.44 pp | 0.855 | 0.914 | 0.003 | 0.047 |
+| `EDUCATION` | 4 | 17.73 pp | **0.535** | **0.721** | 0.197 | 0.451 |
+| `MARRIAGE` | 3 | 2.28 pp | 0.841 | 0.814 | 0.074 | 0.023 |
+| Age band | 4 | 5.27 pp | **0.773** | 0.838 | 0.023 | 0.061 |
+
+Per-group rates with Wilson 95% intervals are in Appendix B; the measured training-set
+disparities (male 24.19% vs female 20.75%; education 19.38% → 23.80% → 24.69%) reproduce Phase
+1's reported figures to within a tenth of a point, the small differences coming from
+de-duplication.
+
+**The model amplifies rather than merely reflects.** The observed male–female default-rate gap
+is 3.44 pp. The model's selection-rate gap is **8.72 pp** — a ratio of **2.54**. For `EDUCATION`
+the amplification ratio is 1.63. A 3.4-point difference in underlying risk becomes an 8.7-point
+difference in who gets declined. This is not a coding error or a leaked protected attribute; it
+is what happens when a threshold is applied to two distributions with different means, and it is
+the reason a disparity audit has to measure decisions rather than inputs.
+
+**Ranking quality is nearly equal where sample sizes are adequate; error rates are not.**
+Per-group ROC-AUC for `SEX` differs by 0.003 — the model ranks men and women equally well — while
+the false-positive-rate gap is 0.083. **Equal ranking and equal error rates are different
+criteria and this model satisfies only the first.** The large `EDUCATION` AUC gap of 0.197 is
+almost entirely one group: category 4, "others", has *n* = 388, a 6.96% default rate against
+19–25% elsewhere, and ROC-AUC 0.591. Excluding it, the AUC gap across the three substantive
+education levels is **0.015**. Reporting the headline gap without that decomposition would
+overstate the problem; suppressing the group would understate it.
+
+**Two attributes fail the four-fifths rule.** `EDUCATION` at 0.535 and age band at 0.773 fall
+below the 0.80 threshold conventionally treated as adverse impact. `EDUCATION` still fails at
+0.775 once the anomalous "others" group is excluded. This is a finding about the deployed
+decision rule, not about the algorithm: the same model at a different threshold produces
+different ratios, which is precisely why §5.4's operating point is a policy choice rather than a
+technical one.
+
+#### Fairness through unawareness does not work here
+
+The plan's most interesting fairness question is whether removing the protected columns removes
+their influence. §5.2 already produced the arm: dropping all four demographics costs
+**−0.0013** ROC-AUC, inside one fold-SD, so the columns are nearly free to discard.
+
+They are not free to *rely on discarding*. With `SEX`, `EDUCATION`, `MARRIAGE` and `AGE` removed
+entirely, the male–female selection-rate gap falls only from **0.0872 to 0.0506** — **58.0% of
+the disparity survives a model that cannot see sex at all.** The financial columns proxy for the
+demographic ones: credit limit, bill amounts and repayment history carry enough information to
+reconstruct the demographic split without ever being told it.
+
+This is Barocas and Selbst's (2016) argument reproduced as a measurement on this dataset.
+Dropping a protected attribute does not remove its influence — it removes the *audit trail* for
+that influence, which is strictly worse, because the disparity persists while the means of
+detecting it does not.
+
+The result is not uniform, which is itself worth reporting. Removing demographics improves the
+ratio for `SEX` (0.855 → 0.914) and age band (0.773 → 0.838), leaves `EDUCATION` failing
+(0.535 → 0.721), and makes `MARRIAGE` slightly **worse** (0.841 → 0.814). Unawareness is not a
+lever that moves disparity in a predictable direction; it removes information the model was
+using and lets the proxies redistribute it.
+
+**What this supports and what it does not.** The evidence supports a specific claim: on this
+dataset, deleting protected columns is not a fairness intervention, and any fairness argument
+must be made against measured decision outcomes. It does not support a claim that the model is
+discriminatory in a legal sense, which depends on jurisdiction, on the legitimacy of the
+business need, and on the counterfactual lending policy — none of which are in scope here. Nor
+does it evaluate the mitigation methods (reweighing, adversarial debiasing, post-hoc threshold
+adjustment per group) that a real deployment would require. The contribution is the measurement
+and the demonstration that the obvious fix does not work.
+
+### 5.7 Final hold-out evaluation
+
+Everything above is cross-validation on the training portion. The hold-out was read **once**,
+by `exp14_final`, after every hyperparameter and every operating point had been frozen. No
+choice in this report was made with reference to the numbers below.
+
+**Table 6 — Held-out performance, 5,989 rows / 1,324 positives, thresholds frozen from OOF at
+r = 6.**
+
+| Configuration | Features | τ | ROC-AUC | PR-AUC | Brier | Recall | Precision | Cost (flat, r=6) |
+|---|---|---|---|---|---|---|---|---|
+| `PAY_0` single rule | 1 | 0.0001 | 0.6430 | 0.3763 | 0.1461 | 1.0000 | 0.2211 | 4,665 |
+| XGBoost, library defaults | 23 | 0.0881 | 0.7607 | 0.5270 | 0.1408 | 0.8557 | 0.2963 | 3,837 |
+| **XGBoost, tuned** | 23 | 0.1341 | **0.7829** | **0.5638** | **0.1334** | 0.8444 | 0.3261 | **3,546** |
+| Tuned, reweighted (arm C′) | 23 | 0.3580 | 0.7829 | 0.5622 | 0.1797 | 0.8346 | 0.3347 | 3,510 |
+| Tuned, isotonic-calibrated | 23 | 0.1401 | 0.7810 | 0.5469 | 0.1344 | 0.7258 | 0.3846 | 3,716 |
+| Tuned, no `PAY_0` | 22 | 0.1381 | 0.7519 | 0.5057 | 0.1425 | 0.8437 | 0.3033 | 3,808 |
+| Tuned, no demographics | 19 | 0.1341 | 0.7806 | 0.5614 | 0.1339 | 0.8414 | 0.3222 | 3,604 |
+
+The headline configuration reaches **ROC-AUC 0.7829** on the hold-out against 0.7845 in
+cross-validation — a 0.0016 shortfall, well inside one fold-SD, which is the expected behaviour
+of a selection process that never saw these rows. At the frozen τ = 0.1341 it catches **1,118 of
+1,324 defaults (recall 0.844)** at precision 0.326, for 2,310 false positives.
+
+**The frozen threshold earns its keep.** The same fitted model read at the default 0.5 would
+incur a flat cost of 5,336 against **3,546** at τ = 0.1341 — a **33.5% reduction in expected
+loss from a decision-rule change alone**, no retraining involved. Under the instance-weighted
+scheme, where each error is charged against the client's `LIMIT_BAL` as an EAD proxy, tuned
+XGBoost costs NT$67.1M against NT$99.8M for the single rule.
+
+**The imbalance and calibration conclusions survive the hold-out.** Arm C′ — reweighted, with
+its own frozen threshold — reaches ROC-AUC 0.7829 against arm B's 0.7829 and costs 3,510 against
+3,546, a 1.0% gap that is not a result at this sample size. Its Brier is 0.1797 against 0.1334.
+Exactly as §5.3 predicted from cross-validation: the same destination, reached with the
+probabilities intact or not. Isotonic calibration, meanwhile, does **not** reproduce its
+CV benefit here — Brier 0.1344 against 0.1334 for the raw model, marginally *worse*. The
+calibrator is fitted on a single 15% slice rather than per-fold, so this is the expected cost
+of a smaller calibration sample, and it is the reason the raw-probability model is the one
+carried forward rather than the calibrated one.
+
+**The single rule has no usable operating point.** Its OOF cost-minimising threshold at r = 6
+lands *below* both of its two leaf probabilities, so the cost-optimal action for a depth-1 tree
+at a 6:1 loss ratio is to decline every applicant: recall 1.000, precision 0.221, zero true
+negatives. This is an interpretability cost that the AUC column does not show. A model with one
+rule has two distinct scores and therefore two reachable decision rules, and at this cost ratio
+neither of them discriminates.
+
+**Statistical significance, on the one comparison that licenses it.** DeLong's paired test on
+the correlated held-out ROC curves:
+
+| Comparison | ΔAUC | 95% CI | *p* |
+|---|---|---|---|
+| Tuned vs `PAY_0` single rule | **+0.1399** | +0.1268 to +0.1531 | 1.5 × 10⁻⁹⁶ |
+| Tuned vs library defaults | +0.0222 | +0.0145 to +0.0300 | 1.8 × 10⁻⁸ |
+| Tuned vs no `PAY_0` | +0.0311 | +0.0233 to +0.0389 | 6.6 × 10⁻¹⁵ |
+
+Both gaps are real, and their *relative* sizes are the interesting part: capability buys
+**+0.1399** over one rule while the entire 150-trial search buys **+0.0222**. Six times more of
+the climb comes from being an ensemble than from being a well-tuned one — which is the
+quantitative form of the §4.2.1 observation that the search plateaued early.
+
+**The `PAY_0` irregularity is survivable but real.** Phase 1 recorded repayment code `1`
+appearing 0, 0, 2, 4, 28 times from April to August and then **3,688 times in September**,
+suggesting `PAY_0` may be constructed differently from the five historical columns — and it is
+both the most predictive single feature (§5.2) and the largest SHAP contributor (§5.5).
+Dropping it costs **−0.0289** in CV (paired over the 25 fits, *t* = −30.8; per §3.9 the effect
+size is the reportable quantity, not the *p*-value, since the folds overlap) and **−0.0311** on
+the hold-out. The model without it still reaches **0.7519**, so the headline is not an artefact
+of the anomaly. But a production deployment should verify how the most recent repayment status
+is derived before relying on it, and that caveat is reported rather than buried.
+
+**Seed variance sets the floor for what counts as a difference.** Ten refits of the final
+configuration give test ROC-AUC **0.7820 ± 0.0053**, so nothing closer than roughly 0.0105
+(two SD) is distinguishable from reseeding noise — the threshold this report has applied
+throughout. The spread is not symmetric, and the asymmetry is worth naming: nine of the ten
+seeds fall inside 0.7827–0.7854, a range of 0.0026, while one lands at **0.7671 with Brier
+0.1691** against ~0.1335 for the others. A single bad draw of the inner 15% early-stopping
+slice can stop a fit in a materially worse place. The reported SD is therefore driven by one
+outlier rather than by broad instability, which is a more useful statement than the SD alone,
+and it argues for averaging over seeds in any deployment.
+
+**On the irreducible error floor — a Phase 1 expectation that had to be withdrawn.** Phase 1
+identified 21 duplicate groups carrying contradictory labels and concluded that a small Bayes
+error floor existed. After the de-duplication of §3.1, **0 groups of feature-identical clients
+carry contradictory labels** — collapsing duplicate feature-rows removed exactly the rows that
+created the floor. The label-contradiction argument therefore cannot be used to explain the
+residual error, and this report does not use it.
+
+The ceiling claim has to rest on something else, and it does. The learning curve (Appendix A)
+flattens well before the full training set, so more rows of the same kind will not help. The
+tuned-versus-untuned gap is +0.0222 against a +0.1399 capability gap, so more search will not
+help much either. The binding constraint is the feature set: a six-month billing snapshot
+cannot observe job loss, illness, divorce or an income shock, and those are what actually cause
+consumer default. **Plateauing near ROC-AUC 0.78 is a feature-set ceiling, not a model
+deficiency** — and that conclusion is now supported by measurement rather than by the duplicate
+count it was originally expected to rest on.
+
+---
+
+## 6. Summary
+
+**Answering the research questions.** Q1: the gain is real but small and stops early. Moving from
+one readable rule on `PAY_0` to tuned gradient boosting buys **+0.1399 ROC-AUC** on the hold-out
+(DeLong *p* = 1.5 × 10⁻⁹⁶), but 58% of that arrives by the *linear* rung, and the final
+step from library-default to tuned XGBoost is worth only **+0.0222**. So the honest answer is
+conditional: the loss of rule-based interpretability is justified when probabilities are consumed
+by a downstream decision — the cost analysis of §5.4 needs calibrated scores that the single rule
+cannot produce, and its degenerate operating point (recall 1.000, precision 0.221, zero true
+negatives) is the concrete failure — and much harder to justify on ranking quality alone.
+Q2: SHAP bridges the gap **partially**. It is exactly additive (max reconstruction error
+3.7 × 10⁻⁶), it independently recovers the Phase 1 `PAY_0` gradient, and its rankings are stable
+under reseeding (Spearman ρ̄ 0.9375, Jaccard@10 0.8727). But attribution within the collinear
+`BILL_AMT` block is not stable (rank SD 1.73 against 1.16 elsewhere), so those six features are
+auditable only as a *group*, and SHAP explains the model, not the borrower.
+
+**What worked.** The ladder itself was the right instrument: it converted an assertion about the
+accuracy–explainability trade-off into a measured axis, and it is what made the small size of the
+boosting increment visible. Freezing the threshold from out-of-fold probabilities and applying it
+untouched to the hold-out worked exactly as intended — the out-of-fold optimum τ = 0.1341
+transferred to a **33.5% cost reduction** on test against τ = 0.5, closely matching the 33.2%
+predicted in cross-validation. Excluding `scale_pos_weight` from the search space and tuning each
+imbalance arm separately turned a confound into a controlled comparison. And testing the
+encoding, the engineered features and the history window rather than assuming them meant three
+design choices were carried forward on evidence instead of convention.
+
+**What didn't work.** Every intervention aimed at the class imbalance failed, and the failures
+were informative. Reweighting to `scale_pos_weight` = 3.52 moved ROC-AUC by **+0.0003 against a
+fold-SD of 0.0071** — one twenty-third of a standard deviation — while inflating the mean
+predicted probability from 0.2189 to 0.4299 and worsening expected calibration error from 0.0212
+to **0.2088**. SMOTE was worse still (0.7681, Brier 0.2200), and it should have been, since
+interpolating two clients produces `PAY_0` = 0.37, a repayment code that does not exist. Isotonic
+calibration *also* failed where it mattered: on the hold-out it made the Brier score worse
+(0.1344 against the raw model's 0.1334), because the tuned spw = 1 model was already
+near-calibrated and the isotonic step only added estimation variance. Replacing the raw columns
+with engineered aggregates cost 0.0059 ROC-AUC, confirming the Phase 1 prediction that
+aggregation destroys the recency gradient rather than condensing it.
+
+**What surprised me.** Four things, in descending order of how much they changed my view.
+
+*Threshold selection is worth more than the entire hyperparameter search.* One hundred and fifty
+Optuna trials bought +0.0222 ROC-AUC; choosing τ from the cost matrix instead of accepting 0.5
+cut expected cost by a third. The decision rule, not the model, is where the money was.
+
+*A model that cannot see sex still reproduces most of the sex disparity.* Deleting the four
+demographic columns costs only 0.0013 ROC-AUC, yet **58.0% of the selection-rate gap survives** —
+the financial columns proxy for demographics, so fairness-through-unawareness hid the influence
+without removing it, precisely as Barocas and Selbst (2016) predict. It also revealed the model
+*amplifies*: a 3.44 pp observed default-rate gap becomes an 8.72 pp selection gap.
+
+*`PAY_0` = 0 is the strongest negative signal, not `PAY_0` = −2.* Mean SHAP by code runs −0.214,
+−0.165, **−0.288**, +0.250, +1.517 for codes −2, −1, 0, 1, 2. The model independently learned
+that revolving on schedule is safer than paying in full or being dormant, which is the Phase 1
+non-monotonicity recovered from the model's internals rather than from the labels — and the
+single most valuable result in the report for Q2.
+
+*The Bayes-floor argument had to be withdrawn.* I expected the 21 contradictory duplicate groups
+Phase 1 counted to set an irreducible error floor; exp14 measures **zero** after de-duplication,
+because cleaning removed exactly those rows. The feature-set-ceiling conclusion now rests on the
+learning curve and the small tuning gap instead — a weaker-looking but honestly sourced claim.
+
+Two smaller ones are worth recording. XGBoost's own `weight` importance ranks `PAY_0`
+**twelfth** while SHAP ranks it first (cover–weight Spearman ρ = −0.526), so the default
+importance plot would have inverted the report's central finding. And one seed in ten produced a
+materially worse fit (0.7671, Brier 0.1691) — single-seed results in this range are not reliable
+to three decimal places.
+
+**Limitations.** The cost matrix is a defensible construction from published LGD and NIM ranges,
+not this lender's actual figures, so absolute NT$ totals are illustrative and only the *ratio*
+r ≈ 6 drives the threshold. `LIMIT_BAL` is a proxy for exposure at default, not a measurement.
+The dataset is a single six-month window from one Taiwanese issuer in 2005, so nothing here
+should be read as transferring to another portfolio without revalidation. And the fairness
+measurement establishes disparity, not discrimination in a legal sense — that determination
+requires a business-necessity analysis this report is not positioned to make.
+
+---
+
+## 7. References
+
+Barocas, S., & Selbst, A. D. (2016). Big data's disparate impact. *California Law Review, 104*(3),
+671–732. https://doi.org/10.15779/Z38BG31
+
+Chen, T., & Guestrin, C. (2016). XGBoost: A scalable tree boosting system. In *Proceedings of the
+22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining* (pp. 785–794).
+Association for Computing Machinery. https://doi.org/10.1145/2939672.2939785
+
+DeLong, E. R., DeLong, D. M., & Clarke-Pearson, D. L. (1988). Comparing the areas under two or
+more correlated receiver operating characteristic curves: A nonparametric approach.
+*Biometrics, 44*(3), 837–845. https://doi.org/10.2307/2531595
+
+Elkan, C. (2001). The foundations of cost-sensitive learning. In *Proceedings of the 17th
+International Joint Conference on Artificial Intelligence* (pp. 973–978). Morgan Kaufmann.
+
+Lessmann, S., Baesens, B., Seow, H.-V., & Thomas, L. C. (2015). Benchmarking state-of-the-art
+classification algorithms for credit scoring: An update of research. *European Journal of
+Operational Research, 247*(1), 124–136. https://doi.org/10.1016/j.ejor.2015.05.030
+
+Lundberg, S. M., Erion, G., Chen, H., DeGrave, A., Prutkin, J. M., Nair, B., Katz, R.,
+Himmelfarb, J., Bansal, N., & Lee, S.-I. (2020). From local explanations to global understanding
+with explainable AI for trees. *Nature Machine Intelligence, 2*(1), 56–67.
+https://doi.org/10.1038/s42256-019-0138-9
+
+Lundberg, S. M., & Lee, S.-I. (2017). A unified approach to interpreting model predictions. In
+*Advances in Neural Information Processing Systems 30* (pp. 4765–4774). Curran Associates.
+
+Nadeau, C., & Bengio, Y. (2003). Inference for the generalization error. *Machine Learning,
+52*(3), 239–281. https://doi.org/10.1023/A:1024068626366
+
+Niculescu-Mizil, A., & Caruana, R. (2005). Predicting good probabilities with supervised
+learning. In *Proceedings of the 22nd International Conference on Machine Learning* (pp.
+625–632). Association for Computing Machinery. https://doi.org/10.1145/1102351.1102430
+
+Saito, T., & Rehmsmeier, M. (2015). The precision-recall plot is more informative than the ROC
+plot when evaluating binary classifiers on imbalanced datasets. *PLoS ONE, 10*(3), e0118432.
+https://doi.org/10.1371/journal.pone.0118432
+
+Yeh, I.-C., & Lien, C.-H. (2009). The comparisons of data mining techniques for the predictive
+accuracy of probability of default of credit card clients. *Expert Systems with Applications,
+36*(2), 2473–2480. https://doi.org/10.1016/j.eswa.2007.12.020
+
+---
+
+<div style="page-break-after: always;"></div>
+
+# Appendix
+
+*The page cap applies to Introduction through References only. Everything below is supporting
+material, and the source code listing in Appendix C is required by the brief.*
+
+## Appendix A — Supporting figures
+
+| Figure | Content |
+|---|---|
+| A1 | Optuna TPE optimisation history and fANOVA parameter importances (§4.1–4.2) |
+| A2 | Learning curve, train and validation, 5 fractions × 5 seeds (§5.2) |
+| A3 | Recency ablation — ROC-AUC against months of history retained (§5.2) |
+| A4 | Feature-group ablation, leave-one-out and only-one (§5.2) |
+| A5 | SHAP waterfall pair — one true positive and one false negative (§5.5) |
+| A6 | Per-subgroup fairness panel with Wilson intervals (§5.6) |
+| A7 | Importance-measure agreement heatmap and rank stability under reseeding (§5.5) |
+| A8 | Engineered-feature and encoding ablations with fold-SD intervals (§4.4, §5.2) |
+| A9 | Seed variance on the final configuration, 10 seeds (§5.7) |
+
+![Figure A1](../figures/p2_app1_optuna.png)
+
+**Figure A1.** Optuna TPE study, 150 trials. Left: optimisation history with the running best.
+Right: fANOVA parameter importances, which is what justifies calling `subsample` and
+`min_child_weight` the high-leverage parameters rather than assuming it (§4.2).
+
+![Figure A2](../figures/p2_app2_learning_curve.png)
+
+**Figure A2.** Training and validation ROC-AUC against training-set fraction, 5 seeds per
+fraction. The validation curve flattens well before the full training set, which is the
+evidence for the feature-set-ceiling claim of §5.7 — more rows of the same kind will not help.
+
+![Figure A3](../figures/p2_app3_recency.png)
+
+**Figure A3.** Recency ablation: ROC-AUC against months of repayment history retained, in
+`PAY_CHRONO` order. Marginal gain decays monotonically and turns negative at the sixth month.
+
+![Figure A4](../figures/p2_app4_feature_groups.png)
+
+**Figure A4.** Feature-group ablation, all eleven arms. Leave-one-group-out above,
+only-one-group below. Dropping repayment status is the only change that exceeds a few fold-SDs.
+
+![Figure A5](../figures/p2_app5_shap_waterfalls.png)
+
+**Figure A5.** SHAP waterfall pair on held-out clients: a correctly identified default at *p* =
+0.856, and a **missed** default at *p* = 0.035. The second is the more instructive — it shows
+the model was misled by an unremarkable repayment history, which is exactly the kind of failure
+an audit trail has to be able to display.
+
+![Figure A6](../figures/p2_app6_fairness.png)
+
+**Figure A6.** Per-subgroup detail for all four protected attributes. Left column: observed
+default rate with Wilson 95% intervals against the model's flag rate at the frozen threshold.
+Right column: recall, false-positive rate and ROC-AUC per subgroup.
+
+![Figure A7](../figures/p2_app7_importance_agreement.png)
+
+**Figure A7.** Left: Spearman rank agreement between five importance measures. Right: SHAP rank
+stability across five reseeded refits. The negative cover–weight correlation is the result that
+makes "use the built-in importance plot" indefensible (§5.5).
+
+![Figure A8](../figures/p2_app8_engineered_encoding.png)
+
+**Figure A8.** Engineered-feature benchmark and encoding ablation with fold-SD intervals. Every
+arm in the encoding panel falls inside one SD of the others, which is why native integers are
+carried forward on the argument of §4.4 rather than on a score difference.
+
+![Figure A9](../figures/p2_app9_robustness.png)
+
+**Figure A9.** Final configuration refit under 10 seeds. Nine cluster tightly; one lands
+materially lower, which is why §5.7 reports a spread rather than a single number.
+
+## Appendix B — Supporting tables
+
+| Table | Content |
+|---|---|
+| B1 | Selected hyperparameters against their searched ranges (§4.2) |
+| B2 | Encoding ablation, all four arms (§4.4) |
+| B3 | Engineered-feature benchmark, all four arms (§5.2) |
+| B4 | Feature-group ablation, all eleven arms (§5.2) |
+| B5 | Recency ablation, k = 1..6 months (§5.2) |
+| B6 | Learning curve, mean ± SD per training fraction (§5.2) |
+| B7 | Full per-subgroup fairness detail with Wilson 95% intervals (§5.6) |
+| B8 | Experiment runtimes and reproduction manifest |
+
+## Appendix C — Source code
+
+Every module is listed in full. The structure reflects the design argument of §3: one evaluation
+path, one model factory, one leakage boundary.
+
+| File | Role |
+|---|---|
+| `src/config.py` | Seeds, paths, cost constants, search space, arm registry |
+| `src/data.py` | Loading, cleaning, feature groups, `engineer()`, splits |
+| `src/metrics.py` | `evaluate`, `wilson`, `brier`, `reliability`, fast DeLong, paired fold test |
+| `src/costs.py` | Cost matrix, `cost_at_threshold`, `pick_threshold_oof`, `elkan_p_star` |
+| `src/models.py` | Model zoo — every rung of the ladder and every XGBoost variant |
+| `src/tuning.py` | Optuna objective and study runner |
+| `src/runner.py` | `cv_evaluate` — the single evaluation path (§3.3) |
+| `src/plotting.py` | Phase 1 house style and Phase 2 figure primitives |
+| `src/report.py` | Table builders, so no number is retyped |
+| `experiments/exp01..exp14` | One script per experiment |
+| `experiments/aggregate.py` | Flattens `results/*.json` into `manifest.csv` |
+| `experiments/figures.py` | All 15 figures, rebuilt from `results/` alone |
+| `experiments/verify.py` | The §5.7 verification gate |
+
+Repository: `https://github.com/busta432/DataMining-Credit-Card-Defaults`

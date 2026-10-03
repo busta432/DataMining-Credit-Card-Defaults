@@ -1,0 +1,317 @@
+<section id="s-features" data-title="Feature studies">
+<h2><span class="kicker">Section 10</span>Feature studies: where the signal actually lives</h2>
+
+<p class="lede">Five ablations, 28 arms, one purpose: establish empirically what the model is
+learning from, so that every claim about the data is measured rather than asserted. Two of these
+experiments exist because Phase 1 made a specific commitment, and one of those predictions turns
+out to be neither confirmed nor refuted — which is itself the honest finding.</p>
+
+<h3>10.1 Encoding: four representations, one conclusion</h3>
+
+<p><code>PAY_n</code> is an ordinal code with a non-monotonic relationship to default. There are
+three defensible ways to hand that to a tree, plus one arm included purely to prove a point about
+scaling.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Arm</th><th class="num">features</th><th class="num">ROC-AUC</th>
+<th class="num">± SD</th><th class="num">PR-AUC</th><th>What it tests</th></tr></thead>
+<tbody id="enc-tbl"></tbody></table></div>
+
+<p>All four sit within <strong><span data-v="enc-spread"></span></strong> ROC-AUC of each other,
+against a fold-SD of <span data-v="rung6-sd"></span>. None is distinguishable. So the choice is
+made on <em>reasoning</em>, not on the numbers — which is the more interesting position to be in.</p>
+
+<div class="box key">
+  <div class="bt">Native integers are carried forward, for three reasons</div>
+  <ol>
+  <li><strong>Non-monotonicity is recoverable by stacking splits.</strong> A tree can learn
+  "<code>PAY_0</code> &lt; 0.5" and then, inside that branch, "<code>PAY_0</code> &lt; −1.5",
+  isolating code −2 from codes −1 and 0. Integer encoding costs <em>depth</em>, not expressible
+  functions. This is the key insight — the usual objection to integer-encoding a categorical
+  ("it imposes a false ordering") applies to <em>linear</em> models, where the coefficient really
+  does impose one. Axis-aligned splitting does not.</li>
+  <li><strong>It preserves the recency gradient.</strong> Six distinct integer columns keep
+  Phase 1's measured gradient intact (Spearman ρ rising 0.143 at April → 0.292 at September).
+  One-hot expands to <span data-v="enc-onehot-n"></span> columns, scattering each month's signal
+  across eleven sparse dummies, and §7's <code>colsample_bytree</code> =
+  <span data-v="bp-colsample_bytree"></span> then samples columns in a way that no longer
+  corresponds to sampling <em>months</em>.</li>
+  <li><strong>It avoids a live library incompatibility.</strong> See the trap below.</li>
+  </ol>
+</div>
+
+<div class="box trap">
+  <div class="bt">The <code>enable_categorical</code> trap — version-specific and real</div>
+  <p>The <code>native_categorical</code> arm is the <em>numerically best</em> of the four
+  (<span data-v="enc-cat"></span> vs <span data-v="enc-native"></span>) — by an amount well inside
+  one SD, but best. It is still not carried forward, and the reason is a hard constraint rather
+  than a preference.</p>
+  <p>XGBoost 3.4 with <code>enable_categorical=True</code> emits <strong>categorical split
+  nodes</strong>, which partition a set of levels rather than testing a threshold.
+  <code>shap</code> 0.52's interventional TreeSHAP cannot traverse them:</p>
+  <pre style="margin:11px 0"><code>NotImplementedError: Categorical split is not yet supported.</code></pre>
+  <p style="margin-bottom:0">Research question 2 is <em>entirely</em> about post-hoc
+  explainability. Choosing an encoding that gains 0.0009 ROC-AUC — one eighth of a fold-SD — at
+  the cost of making §11 and §12 impossible would be trading the answer to half the research
+  questions for noise. Naming the exact exception is also better evidence than "we had
+  compatibility issues".</p>
+</div>
+
+<div class="box why">
+  <div class="bt">The signed-log arm proves scale invariance <em>exactly</em></div>
+  <p style="margin-bottom:0">Applying sign(x)·log1p(|x|) to <code>LIMIT_BAL</code>, all six
+  <code>BILL_AMT</code> and all six <code>PAY_AMT</code> columns changes ROC-AUC by
+  <strong>+0.00000</strong> — identical to the digit, not merely close. §3 argued this must be
+  true: a strictly increasing transform preserves the sorted order of every column, so the same
+  candidate splits exist and the same tree is learned. The arm turns the argument from theory into
+  measurement, and it is the cleanest possible reply to the Phase 1 recommendation to scale
+  features — that recommendation was for distance and gradient learners, and this one line of
+  evidence shows it does not apply here.</p>
+</div>
+
+<h3>10.2 Engineered features: a Phase 1 promise, honoured</h3>
+
+<p>Phase 1 §2.2.2 committed, verbatim, that aggregated <code>PAY_n</code> features
+<em>"should be benchmarked against using the columns individually rather than assumed to be an
+improvement"</em>, and predicted aggregation might <strong>lose</strong> the recency gradient. Four
+arms test it.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Arm</th><th class="num">features</th><th class="num">engineered</th>
+<th class="num">ROC-AUC</th><th class="num">± SD</th><th class="num">Δ vs raw 23</th>
+<th class="num">PR-AUC</th></tr></thead>
+<tbody id="eng-tbl"></tbody></table></div>
+
+<div class="box key">
+  <div class="bt">The honest reading: the prediction is neither confirmed nor refuted</div>
+  <p>Adding the 17 engineered features moves ROC-AUC by
+  <strong><span data-v="eng-delta-plus"></span></strong> — <em>inside</em> one fold-SD of
+  <span data-v="rung6-sd"></span>, so not distinguishable. Replacing the raw columns entirely
+  costs <strong><span data-v="eng-drop-only"></span></strong>, which is also inside one SD.</p>
+  <p>Phase 1 predicted a loss from aggregation. The engineered-only arm is directionally
+  consistent with that — it <em>is</em> the worst arm, and its PR-AUC drop
+  (<span data-v="eng-pr-only"></span> vs <span data-v="eng-pr-raw"></span>) is larger than its
+  ROC-AUC drop, which is what losing resolution in the high-threshold region looks like. But the
+  effect does not clear the noise floor, and the correct report sentence says so: <em>"directionally
+  consistent with the Phase 1 prediction but not statistically distinguishable at one fold-SD."</em></p>
+  <p style="margin-bottom:0">Resisting the temptation to call <span data-v="eng-delta-plus"></span>
+  an improvement is worth marks. It is half a fold-SD.</p>
+</div>
+
+<div class="box why">
+  <div class="bt">Why the RFE arm exists — removing the width confound</div>
+  <p style="margin-bottom:0"><code>raw_plus_engineered</code> has 40 columns against the baseline's
+  23, and more columns can help purely by giving <code>colsample_bytree</code> a larger pool to
+  draw from. The RFE arm eliminates that confound by recursively eliminating back down to
+  <strong>23</strong> features from the combined pool — an equal-width comparison. It retains
+  <span data-v="eng-rfe-n"></span> engineered features and scores
+  <span data-v="eng-rfe-auc"></span>, which is <em>between</em> the two, and tells you something
+  the other arms cannot: RFE voluntarily kept <code>UTIL_1–3</code>, <code>N_DELINQ</code>,
+  <code>MAX_DELINQ</code>, <code>DELINQ_TREND</code> and <code>BILL_TREND</code> while discarding
+  <code>PAY_5</code>, <code>BILL_AMT3/4/6</code> and five of the six <code>PAY_RATIO_n</code>.
+  So the engineered features are not useless — several are preferred over raw columns — they are
+  just <em>substitutes</em> for information the raw columns already carry.</p>
+</div>
+
+<div class="box trap">
+  <div class="bt">The <code>NaN</code> decision, and why it is a library-feature argument</div>
+  <p><code>PAY_RATIO_n = PAY_AMTn / BILL_AMTn</code> is undefined where the statement balance is
+  zero, and <em>meaningless</em> where it is negative — and Phase 1 §1.6 documented
+  <strong>1,930 rows</strong> with a negative <code>BILL_AMT</code> (credit balances from
+  overpayment or refunds). Three options existed:</p>
+  <ul>
+  <li><strong>Impute a sentinel</strong> such as 0 or −999: tells the model a falsehood, and a
+  sentinel in a numeric column creates a split point with no semantic meaning.</li>
+  <li><strong>Drop the rows:</strong> discards 6.4% of the data, non-randomly — overpayers are not
+  a random subsample.</li>
+  <li><strong>Emit <code>np.nan</code></strong> and let XGBoost's sparsity-aware split finding
+  learn a <em>default direction</em> per node (§3.6). ✅</li>
+  </ul>
+  <p style="margin-bottom:0">The third is chosen, and it is worth noting in Solution precisely
+  because it is <em>a feature of the chosen library being used deliberately</em> rather than a
+  generic preprocessing step. The direction is learned from the gradient statistics, so the model
+  discovers for itself whether "no meaningful bill" behaves more like a payer or a non-payer.
+  <code>verify.py</code> asserts no column contains <code>inf</code>, which is the real hazard —
+  division by zero producing <code>inf</code> rather than <code>NaN</code> would poison the
+  gradient sums rather than route around them.</p>
+</div>
+
+<h3>10.3 Feature-group ablation: two views that deliberately disagree</h3>
+
+<p>Eleven arms over five groups: <strong>leave-one-out</strong> (how much is lost by removing a
+group) and <strong>only-one</strong> (how much a group achieves alone). Reporting both is the
+point.</p>
+
+<div class="widget">
+  <div class="wt">Interactive · where the signal lives</div>
+  <p class="wd">Switch between the two views. <strong>The disagreement is the finding:</strong>
+  <code>bill</code> reaches <span data-v="grp-only-bill"></span> alone but costs only
+  <span data-v="grp-loo-bill"></span> when removed — individually predictive, almost entirely
+  redundant once the other groups are present. <code>pay_status</code> is the opposite: it
+  dominates on both views.</p>
+  <div class="seg" id="grp-seg">
+    <button data-v="loo" class="on">leave-one-out (loss)</button
+    ><button data-v="only">only-one (absolute)</button>
+  </div>
+  <svg class="chart" id="grp-chart" viewBox="0 0 760 320" role="img"
+       aria-label="Feature-group ablation: leave-one-out loss and only-one ROC-AUC"></svg>
+  <div class="tw" style="margin:14px 0 0"><table>
+  <thead><tr><th>Group</th><th class="num">columns</th><th class="num">only-one ROC-AUC</th>
+  <th class="num">leave-one-out loss</th><th>Reading</th></tr></thead>
+  <tbody id="grp-tbl"></tbody></table></div>
+</div>
+
+<div class="box key">
+  <div class="bt">Three results, in order of importance</div>
+  <ol>
+  <li><strong>Repayment status dominates.</strong> Removing it costs
+  <span data-v="grp-loo-pay"></span> ROC-AUC — by far the largest leave-one-out loss, roughly
+  <em>seven</em> fold-SDs. Alone it reaches <span data-v="grp-only-pay"></span> against
+  <span data-v="rung6-auc"></span> for all 23 features, so <strong>six columns carry most of the
+  available signal</strong>. This independently confirms the Phase 1 conclusion, by a completely
+  different method (Phase 1 used bivariate rate tables; this is multivariate ablation).</li>
+  <li><strong>The monetary columns are largely redundant.</strong> <code>bill</code> alone reaches
+  <span data-v="grp-only-bill"></span>, well above chance — yet removing it costs only
+  <span data-v="grp-loo-bill"></span>, inside one SD. The information is real but duplicated: it
+  is the same repayment behaviour expressed in dollars. This is the ablation signature of
+  collinearity, and it is the same block that carries VIF 13.9–25.7 — which becomes important in
+  §11, because SHAP will split credit arbitrarily among redundant columns.</li>
+  <li><strong>Demographics contribute almost nothing.</strong> Alone, the four demographic columns
+  reach <span data-v="grp-only-demo"></span> — barely above the 0.5 chance line. Removing them
+  costs <span data-v="grp-loo-demo"></span>, inside one SD. This matters twice: it means dropping
+  them is nearly free, and it sets up §13's actual question, which is whether the financial
+  columns <em>proxy</em> for them anyway.</li>
+  </ol>
+</div>
+
+<div class="box why">
+  <div class="bt">Why leave-one-out and only-one must both be reported</div>
+  <p style="margin-bottom:0">Each view answers a different question and each is misleading alone.
+  <em>Only-one</em> asks "is this group informative?" and over-credits redundant groups —
+  <code>bill</code> looks valuable. <em>Leave-one-out</em> asks "is this group necessary?" and
+  under-credits them — <code>bill</code> looks worthless. Neither is wrong; they are answering
+  "informative" and "necessary", which differ exactly to the extent that features are correlated.
+  A report that showed only one view would be making a claim the other view contradicts, and the
+  obvious question in a viva is the one you did not run.</p>
+</div>
+
+<h3>10.4 Recency: how much history does a lender actually need?</h3>
+
+<p>Six arms, keeping only the most recent <em>k</em> months of <code>PAY</code>/<code>BILL</code>/
+<code>PAY_AMT</code> plus the five static columns. This tests Phase 1's recency gradient directly
+and reframes it as an operational question.</p>
+
+<div class="widget">
+  <div class="wt">Interactive · the value of history</div>
+  <p class="wd">Each point adds one more month of statement history, working backwards from
+  September. <strong>The marginal curve is the result:</strong> the first month buys most of it,
+  and the sixth month is <em>negative</em>.</p>
+  <svg class="chart" id="rec-chart" viewBox="0 0 760 320" role="img"
+       aria-label="ROC-AUC against months of statement history retained"></svg>
+  <div class="tw" style="margin:14px 0 0"><table>
+  <thead><tr><th class="num">k</th><th>months retained</th><th class="num">features</th>
+  <th class="num">ROC-AUC</th><th class="num">± SD</th><th class="num">marginal gain</th></tr></thead>
+  <tbody id="rec-tbl"></tbody></table></div>
+</div>
+
+<div class="box key">
+  <div class="bt">The practical finding, which belongs in the Summary section</div>
+  <p>One month of history — September alone — already reaches
+  <span data-v="rec-k1"></span>, against <span data-v="rec-k6"></span> for all six. Five
+  additional months of data collection buy <span data-v="rec-total-gain"></span> ROC-AUC, roughly
+  two fold-SDs in total. The smallest window landing within one fold-SD of the full six months is
+  <strong>k = <span data-v="rec-smallest-k"></span></strong>.</p>
+  <p>Marginal gains decay fast, and the sixth month is <em>negative</em>
+  (<span data-v="rec-marg-k6"></span>) — adding <code>PAY_6</code>, <code>BILL_AMT6</code> and
+  <code>PAY_AMT6</code> makes the model very slightly worse, which is what adding noise columns
+  to a 24,000-row fit looks like.</p>
+  <p style="margin-bottom:0">This is the Phase 1 recency gradient (ρ 0.143 → 0.292) restated as a
+  <strong>data-collection cost</strong>, which is a far more useful statement to a lender than a
+  correlation coefficient. It also answers a question nobody asked but everybody would:
+  <em>why six months?</em> Because that is what UCI published — and three would have done.</p>
+</div>
+
+<h3>10.5 The learning curve: is the model data-limited or feature-limited?</h3>
+
+<p>Five training fractions, five seeds each, with <em>both</em> the training and validation curves
+recorded. This distinguishes two situations that look identical if you only plot validation
+performance, and the distinction carries the central claim of the Summary.</p>
+
+<div class="widget">
+  <div class="wt">Interactive · learning curve with the generalisation gap</div>
+  <p class="wd">Validation ROC-AUC (solid) and training ROC-AUC (dashed), with the shaded band
+  showing ± one SD across seeds. <strong>Two things to read:</strong> the validation curve
+  flattening, and the gap between the curves staying roughly constant rather than closing.</p>
+  <svg class="chart" id="lc-chart" viewBox="0 0 760 340" role="img"
+       aria-label="Learning curve: training and validation ROC-AUC against training fraction"></svg>
+  <div class="tw" style="margin:14px 0 0"><table>
+  <thead><tr><th class="num">fraction</th><th class="num">rows</th>
+  <th class="num">validation</th><th class="num">± SD</th><th class="num">training</th>
+  <th class="num">gap</th><th class="num">marginal</th></tr></thead>
+  <tbody id="lc-tbl"></tbody></table></div>
+</div>
+
+<div class="box key">
+  <div class="bt">Why a plateau is a stronger claim than an assertion</div>
+  <p>Validation ROC-AUC rises <span data-v="lc-f10"></span> at 10% of the data to
+  <span data-v="lc-f100"></span> at 100%. Half the data already reaches
+  <span data-v="lc-f50"></span>, and the final step from 75% to 100% adds
+  <span data-v="lc-marg-last"></span> against a fold-SD of
+  <span data-v="lc-sd-last"></span>. <strong>The curve has flattened.</strong></p>
+  <p>Now the diagnostic that the training curve enables. There are two distinct reasons a
+  validation curve plateaus:</p>
+  <ul>
+  <li><strong>High variance</strong> — the model is overfitting, the train–validation gap is
+  large and <em>shrinking</em> with more data, and more data would close it. The fix is more
+  data.</li>
+  <li><strong>High bias / feature ceiling</strong> — the gap is small and <em>stable</em>, and both
+  curves have converged. More data cannot help, because the features do not contain the missing
+  information. The fix is better features.</li>
+  </ul>
+  <p style="margin-bottom:0">The measured gap is <span data-v="lc-gap-first"></span> at 10% of the
+  data and <span data-v="lc-gap-last"></span> at 100% — essentially unchanged. So this is the
+  second case: a <strong>feature-set ceiling</strong>. Having the training curve is what licenses
+  that conclusion; the validation curve alone is consistent with both stories.</p>
+</div>
+
+<div class="box mark">
+  <div class="bt">The three-legged argument this feeds into</div>
+  <p style="margin-bottom:0">The Summary's central claim is that performance here is bounded by
+  what a six-month billing snapshot can observe — it cannot see job loss, illness, divorce or
+  income shock. Three independent pieces of evidence support it, and none would be sufficient
+  alone: <strong>(1)</strong> the learning curve is flat with a stable gap (this section);
+  <strong>(2)</strong> the whole searched hyperparameter space is worth under one fold-SD (§7);
+  <strong>(3)</strong> a single column, <code>PAY_0</code>, is worth
+  <span data-v="pay0-cv-drop"></span> — more than tuning and more than five extra months of
+  history combined (§14). An argument assembled from three different experiments is much harder to
+  dismiss than an assertion that the dataset is "hard".</p>
+</div>
+
+<details class="q"><summary>Self-check: the <code>native_categorical</code> arm scored highest. Isn't rejecting it cherry-picking?</summary>
+<div class="dbody">
+<p>It would be if the rejection were on performance grounds, or if the arm were hidden. Neither
+applies: the arm is reported in the table with its winning number, and the stated reason is a
+hard tooling constraint — <code>shap</code> 0.52 raises
+<code>NotImplementedError: Categorical split is not yet supported</code> on categorical split
+nodes.</p>
+<p>The quantities being traded are also wildly asymmetric. The gain is
+<span data-v="enc-cat-delta"></span> ROC-AUC, about one eighth of a fold-SD, i.e. not
+distinguishable from zero. The cost is the entire answer to research question 2. Declaring the
+trade-off and the exception is the transparent move; silently dropping the arm would be the
+cherry-pick.</p>
+</div></details>
+
+<details class="q"><summary>Self-check: if k = 3 months is within one SD of k = 6, why does the final model use all six?</summary>
+<div class="dbody">
+<p>Because "within one fold-SD" means <em>not distinguishably worse</em>, not <em>better</em>. The
+point estimate for k = 6 is still higher than k = 3 (<span data-v="rec-k6"></span> vs
+<span data-v="rec-k3"></span>), the data is already collected, and there is no cost to using it.
+Discarding available columns to chase parsimony the evidence does not demand would be the wrong
+move.</p>
+<p>The recency finding is a statement about <em>future data collection</em>, not about this model:
+if a lender were specifying a new application-scoring pipeline, three months of statement history
+would capture nearly all the obtainable signal, and that is a real operational saving. That is why
+it lands in Summary — as a practical implication — rather than changing the final feature set.</p>
+</div></details>
+
+</section>

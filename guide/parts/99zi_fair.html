@@ -1,0 +1,376 @@
+
+/* ===================================== 24. subgroup fairness (#fa-*)
+   Three independent switches: which protected attribute, which metric, and
+   which model. The pairing that carries the argument is `selection rate` on
+   the full model against the same metric on the no-demographics model: if the
+   bars barely move, the financial columns were already proxying for the
+   demographic ones, and deleting the columns hid the influence rather than
+   removing it (Barocas & Selbst, 2016). */
+const FA_METRIC = {
+  selection_rate:            { lab: "selection rate (fraction flagged)", fmt: v => pct(v, 1), rate: 1 },
+  recall:                    { lab: "recall (defaulters caught)",        fmt: v => pct(v, 1), rate: 1 },
+  fpr:                       { lab: "false-positive rate",               fmt: v => pct(v, 1), rate: 1 },
+  roc_auc:                   { lab: "ROC-AUC within subgroup",           fmt: f4,             rate: 0 },
+  observed_default_rate_pct: { lab: "observed default rate (%)",         fmt: v => v.toFixed(2) + "%", rate: 0 },
+  mean_predicted:            { lab: "mean predicted probability",        fmt: v => pct(v, 2), rate: 1 }
+};
+
+function buildFairness() {
+  let attr = "SEX", metric = "selection_rate", model = "full";
+
+  function draw() {
+    const row = FAI[model + "_" + attr];
+    if (!row) return;
+    const M2 = FA_METRIC[metric];
+    const gs = row.groups;
+    const vs = gs.map(g => g[metric]).filter(v => v !== null && v !== undefined);
+    if (!vs.length) return;
+    const nd = nice(0, Math.max.apply(null, vs) * 1.1, 5);
+
+    const fr = frame({
+      w: 760, h: 360, pad: { l: 64, r: 20, t: 20, b: 64 },
+      xdom: [-0.5, gs.length - 0.5], ydom: [0, nd.hi], yticks: nd.ticks,
+      yfmt: M2.rate ? (v => (v * 100).toFixed(0) + "%") : (v => String(+v.toFixed(3))),
+      xticks: gs.map((g, i) => ({ v: i, label: String(g.group) })),
+      ylabel: M2.lab
+    });
+
+    const bw = (fr.ix[1] - fr.ix[0]) / gs.length * 0.52;
+    const lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs);
+    gs.forEach((g, i) => {
+      const v = g[metric];
+      if (v === null || v === undefined) return;
+      const isHi = v === hi, isLo = v === lo;
+      const grp = el("g");
+      grp.appendChild(el("rect", {
+        x: fr.x(i) - bw / 2, y: fr.y(v), width: bw, height: fr.y(0) - fr.y(v), rx: 3,
+        style: "fill:" + (isHi ? C.bad : isLo ? C.acc2 : C.acc) + ";opacity:.86" }));
+      /* Wilson interval, but only on the observed rate: it is the one column
+         that is a binomial proportion of the subgroup, which is the estimator
+         the interval is derived for. */
+      if (metric === "observed_default_rate_pct" &&
+          g.wilson_lo_pct !== undefined && g.wilson_lo_pct !== null) {
+        const st = "stroke:var(--ink);stroke-width:1.5";
+        grp.appendChild(el("line", { x1: fr.x(i), x2: fr.x(i),
+          y1: fr.y(g.wilson_lo_pct), y2: fr.y(g.wilson_hi_pct), style: st }));
+        [g.wilson_lo_pct, g.wilson_hi_pct].forEach(b => grp.appendChild(el("line", {
+          x1: fr.x(i) - 5, x2: fr.x(i) + 5, y1: fr.y(b), y2: fr.y(b), style: st })));
+      }
+      grp.appendChild(el("text", { x: fr.x(i), y: fr.y(v) - 7, "text-anchor": "middle",
+        style: "fill:var(--ink2);font-size:10.5px;font-family:var(--mono)" }, M2.fmt(v)));
+      grp.appendChild(el("text", { x: fr.x(i), y: fr.y(0) + 32, "text-anchor": "middle",
+        style: "fill:var(--ink3);font-size:9.5px;font-family:var(--mono)" }, "n=" + KF(g.n)));
+      grp.appendChild(el("title", {}, g.group + "  \u00b7  n = " + int(g.n) + "  \u00b7  " +
+        M2.lab + " " + M2.fmt(v) + "  \u00b7  observed " + g.observed_default_rate_pct.toFixed(2) +
+        "%  \u00b7  recall " + pct(g.recall, 1) + "  \u00b7  FPR " + pct(g.fpr, 1)));
+      fr.g.appendChild(grp);
+    });
+
+    /* The reference line differs by metric: a rate compares to the pooled
+       value, an AUC to the model's overall AUC. */
+    if (metric === "observed_default_rate_pct") hline(fr, PREV * 100, C.ink3, "4 3", "pooled rate");
+    else if (metric === "roc_auc") hline(fr, DATA.fairness.oof_auc[model], C.ink3, "4 3", "overall");
+
+    /* The disparity bracket, which is what the gap columns tabulate. */
+    const span = hi - lo;
+    fr.g.appendChild(el("text", { x: fr.ix[1] - 2, y: fr.iy[1] + 2, "text-anchor": "end",
+      style: "fill:" + C.bad + ";font-size:11px;font-family:var(--mono)" },
+      "spread " + (M2.rate ? pp(span * 100) : String(+span.toFixed(4))) +
+      (lo > 0 ? "   ratio " + mult(lo / hi) : "")));
+    drawInto("fa-chart", fr);
+
+    fillTable("fa-tbl", gs.map(g => Object.assign({}, g, {
+      __cls: g[metric] === hi ? "hi" : null
+    })), [
+      { k: "group" },
+      { k: "n", cls: "num", fmt: v => int(v) },
+      { k: "observed_default_rate_pct", cls: "num", fmt: v => v.toFixed(2) + "%" },
+      { k: "wilson_lo_pct", cls: "num muted",
+        fmt: (v, r) => v === null || v === undefined ? "\u2014"
+          : "[" + v.toFixed(2) + ", " + r.wilson_hi_pct.toFixed(2) + "]" },
+      { k: "roc_auc", cls: "num", fmt: v => f4(v) },
+      { k: "recall", cls: "num", fmt: v => pct(v, 1) },
+      { k: "fpr", cls: "num", fmt: v => pct(v, 1) },
+      { k: "precision", cls: "num", fmt: v => pct(v, 1) },
+      { k: "selection_rate", cls: "num", fmt: v => pct(v, 1) },
+      { k: "mean_predicted", cls: "num muted", fmt: v => pct(v, 2) }
+    ]);
+
+    /* Amplification: does the model's selection-rate disparity exceed the
+       disparity already present in the outcomes? That comparison, not the raw
+       gap, is the defensible claim. */
+    const obs = gs.map(g => g.observed_default_rate_pct);
+    const obsSpan = Math.max.apply(null, obs) - Math.min.apply(null, obs);
+    const sel = gs.map(g => g.selection_rate);
+    const selSpan = (Math.max.apply(null, sel) - Math.min.apply(null, sel)) * 100;
+    const other = FAI[(model === "full" ? "no_demographics" : "full") + "_" + attr];
+
+    let txt = attr + ", " + (model === "full" ? "full 23-feature model" :
+      "model with all four demographic columns deleted") + ", at the frozen \u03c4 = " +
+      f4(DATA.fairness.threshold) + ". Selection-rate spread is " + pp(selSpan) +
+      " against an observed outcome spread of " + pp(obsSpan) + " \u2014 the model " +
+      (selSpan > obsSpan * 1.15 ? "amplifies" : selSpan < obsSpan * 0.85 ? "attenuates" : "roughly preserves") +
+      " the disparity already in the data. ";
+    if (other) {
+      const oSel = other.groups.map(g => g.selection_rate);
+      const oSpan = (Math.max.apply(null, oSel) - Math.min.apply(null, oSel)) * 100;
+      txt += "The " + (model === "full" ? "no-demographics" : "full") + " model's spread on the " +
+        "same attribute is " + pp(oSpan) + ", a retention of " +
+        pct(Math.min(oSpan, selSpan) / Math.max(oSpan, selSpan, 1e-9), 0) +
+        ". Deleting the columns therefore removes the model's *access* to the attribute without " +
+        "removing its *behaviour* with respect to it: LIMIT_BAL, bill sizes and repayment history " +
+        "carry the information. Fairness through unawareness does not work here, and the number " +
+        "above is the measurement of why. ";
+    }
+    if (metric === "roc_auc") txt += "Note that ROC-AUC is threshold-free, so subgroup AUC gaps " +
+      "measure ranking quality rather than allocation \u2014 a model can rank equally well within " +
+      "both groups and still allocate very unequally, which is exactly what the selection-rate " +
+      "view shows.";
+    $("#fa-note").textContent = txt;
+  }
+
+  seg("fa-attr",   "data-a", v => { attr = v; draw(); });
+  seg("fa-metric", "data-m", v => { metric = v; draw(); });
+  seg("fa-model",  "data-k", v => { model = v; draw(); });
+  REDRAW.push(draw);
+}
+
+/* ===================================== 25. gap summary (#fair-gap-tbl) */
+const GAP_NOTE = {
+  SEX: "Mirrors the Phase 1 outcome disparity (male 24.16% against female 20.77%) rather than inventing one. The selection-rate ratio is the quantity an 80%-rule audit would test.",
+  EDUCATION: "The widest ROC-AUC gap of the four, driven by the small `others` category: fewer rows means a noisier within-group ranking, not necessarily a worse one.",
+  MARRIAGE: "Smallest gaps across the board. The attribute carries little signal, so there is little for the model to differentiate on.",
+  AGE_BAND: "Gaps concentrated in the youngest and oldest bands, which are also the sparsest \u2014 read alongside the Wilson intervals before calling it a disparity."
+};
+
+function buildFairGapTable() {
+  const rows = ["SEX", "EDUCATION", "MARRIAGE", "AGE_BAND"]
+    .map(a => FAI["full_" + a]).filter(Boolean);
+  fillTable("fair-gap-tbl", rows.map(r => Object.assign({}, r, {
+    note: GAP_NOTE[r.attribute] || "",
+    __cls: r.attribute === "SEX" ? "hi" : null
+  })), [
+    { k: "attribute", fmt: v => "<code>" + v + "</code>" },
+    { k: "recall_gap", cls: v => "num " + (v > 0.05 ? "bad" : ""), fmt: v => pp(v * 100) },
+    { k: "fpr_gap", cls: v => "num " + (v > 0.05 ? "bad" : ""), fmt: v => pp(v * 100) },
+    /* Below 0.8 is the conventional adverse-impact threshold, so it earns a colour. */
+    { k: "sel_ratio", cls: v => "num " + (v < 0.8 ? "bad" : "good"), fmt: v => f3(v) },
+    { k: "auc_gap", cls: v => "num " + (v > 0.03 ? "bad" : "muted"), fmt: v => f4(v) },
+    { k: "note", fmt: v => '<span class="small">' + v + "</span>" }
+  ]);
+}
+
+/* ===================================== 26. final test table (#fin-tbl) */
+const FIN_NAME = {
+  rung1_pay0_baseline:        "PAY_0 single-rule baseline",
+  rung5_xgb_default:          "XGBoost, library defaults",
+  xgb_tuned:                  "XGBoost, tuned \u2014 headline",
+  xgb_tuned_no_pay0:          "tuned, PAY_0 deleted",
+  xgb_tuned_no_demographics:  "tuned, demographics deleted",
+  xgb_tuned_spw:              "tuned + scale_pos_weight",
+  xgb_tuned_isotonic:         "tuned + isotonic calibration"
+};
+function buildFinalTable() {
+  fillTable("fin-tbl", DATA.final.rows.map(r => Object.assign({}, r, {
+    name: FIN_NAME[r.label] || r.label,
+    __cls: r.label === "xgb_tuned" ? "hi" : null
+  })), [
+    { k: "name" },
+    { k: "n_features", cls: "num" },
+    { k: "roc_auc", cls: "num", fmt: v => f4(v) },
+    { k: "pr_auc", cls: "num", fmt: v => f4(v) },
+    { k: "brier", cls: "num", fmt: v => f4(v) },
+    { k: "threshold", cls: "num muted", fmt: v => f4(v) },
+    { k: "recall", cls: "num", fmt: v => pct(v, 1) },
+    { k: "precision", cls: "num", fmt: v => pct(v, 1) },
+    { k: "total_cost_r6", cls: v => {
+        const lo = Math.min.apply(null, DATA.final.rows.map(x => x.total_cost_r6));
+        return "num " + (v === lo ? "good" : ""); }, fmt: v => int(v) }
+  ]);
+}
+
+/* ===================================== 27. test confusion matrices (#fn-*)
+   Every cell here comes from results/exp14_final.json, computed once at the
+   frozen threshold. Switching configurations is reading seven committed
+   evaluations, not re-evaluating anything. */
+function buildFinalConfusion() {
+  const host = $("#fn-seg");
+  if (!host) return;
+  const rows = DATA.final.rows;
+  host.innerHTML = rows.map((r, i) =>
+    '<button data-k="' + r.label + '"' + (r.label === "xgb_tuned" ? ' class="on"' : "") + ">" +
+    (FIN_NAME[r.label] || r.label).replace(" \u2014 headline", "") + "</button>"
+  ).join("");
+
+  const head = FIN.xgb_tuned;
+
+  function draw(k) {
+    const r = FIN[k];
+    if (!r) return;
+    $("#fn-tn").textContent    = int(r.tn);
+    $("#fn-fp").textContent    = int(r.fp);
+    $("#fn-fn").textContent    = int(r.fn);
+    $("#fn-tp").textContent    = int(r.tp);
+    $("#fn-auc").textContent   = f4(r.roc_auc);
+    $("#fn-pr").textContent    = f4(r.pr_auc);
+    $("#fn-brier").textContent = f4(r.brier);
+    $("#fn-tau").textContent   = f4(r.threshold);
+    $("#fn-rec").textContent   = pct(r.recall, 1);
+    $("#fn-prec").textContent  = pct(r.precision, 1);
+    $("#fn-cost").textContent  = int(r.total_cost_r6);
+    const flagged = r.tp + r.fp;
+    $("#fn-flag").textContent  = int(flagged) + " (" + pct(flagged / DATA.final.n_test, 0) + ")";
+
+    let txt = (FIN_NAME[k] || k) + " on the " + int(DATA.final.n_test) + " held-out clients (" +
+      int(DATA.final.n_test_pos) + " of them defaulters), at its own frozen \u03c4 = " +
+      f4(r.threshold) + ". ";
+    if (k === "rung1_pay0_baseline") {
+      txt += "Note \u03c4 = " + f4(r.threshold) + " and recall = " + pct(r.recall, 0) + ": the " +
+        "single-rule model emits so few distinct scores that the cost-minimising grid point " +
+        "flags everyone. That is not a bug, it is what a one-comparison model buys you \u2014 it " +
+        "cannot express a selective decision, so under a 6:1 cost ratio the cheapest thing it " +
+        "can do is approve nobody. ";
+    } else if (k === "xgb_tuned_no_pay0") {
+      const d = r.roc_auc - head.roc_auc;
+      txt += "Deleting the single most predictive column costs " + sg(d, 4) + " test ROC-AUC. " +
+        "Phase 1 documented that repayment code 1 appears 0, 0, 2, 4 and 28 times from April to " +
+        "August and then 3,688 times in September, so PAY_0 may be constructed differently from " +
+        "its five historical siblings. This row is the insurance: if the anomaly is an artefact, " +
+        "the model still reaches " + f4(r.roc_auc) + " without it. Reporting that is worth more " +
+        "than hiding it. ";
+    } else if (k === "xgb_tuned_isotonic") {
+      txt += "Calibration leaves ROC-AUC at " + f4(r.roc_auc) + " \u2014 isotonic regression is " +
+        "monotone, and a monotone map cannot reorder scores \u2014 while Brier moves to " +
+        f4(r.brier) + ". Only the probabilities changed, which is exactly the point: ranking " +
+        "quality and probability quality are separate properties. ";
+    } else if (k === "xgb_tuned_spw") {
+      txt += "Reweighting at the final stage: compare Brier (" + f4(r.brier) + ") against the " +
+        "headline model's " + f4(head.brier) + " while ROC-AUC moves " +
+        sg(r.roc_auc - head.roc_auc, 4) + ". Ranking is untouched, calibration is worse. ";
+    } else if (k === "xgb_tuned_no_demographics") {
+      txt += "Nineteen features instead of 23, and test ROC-AUC moves " +
+        sg(r.roc_auc - head.roc_auc, 4) + ". The demographic columns were carrying almost no " +
+        "unique signal \u2014 which is the predictive half of the \u00a713 argument, and sets up " +
+        "the uncomfortable fairness half. ";
+    } else if (k === "rung5_xgb_default") {
+      txt += "The untuned library model. The gap to the headline, " +
+        sg(head.roc_auc - r.roc_auc, 4) + ", is the entire return on 150 Optuna trials. ";
+    }
+    txt += "Reading the matrix: the " + int(r.fn) + " false negatives are defaults the lender " +
+      "funds and loses roughly 70% of; the " + int(r.fp) + " false positives are sound clients " +
+      "refused, costing the forgone net interest margin. The frozen threshold is the choice " +
+      "about which of those two mistakes to make more often, and it was made on out-of-fold " +
+      "training data before these labels were ever read.";
+    $("#fn-note").textContent = txt;
+  }
+
+  seg("fn-seg", "data-k", draw);
+}
+
+/* ===================================== 28. seed variance (#sv-*)
+   Ten refits of the identical configuration, differing only in random_state.
+   This is the yardstick for every "improvement" claimed anywhere else: a
+   difference smaller than this spread is a difference in random_state. */
+function buildSeedVariance() {
+  function draw(mode) {
+    const vals = mode === "brier" ? DATA.final.seed_brier : SEEDS_AUC;
+    const lab = mode === "brier" ? "test Brier score" : "test ROC-AUC";
+    if (!vals || !vals.length) return;
+    const mu = mean(vals);
+    const sd = Math.sqrt(sum(vals.map(v => (v - mu) * (v - mu))) / (vals.length - 1));
+    const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    const nd = nice(lo - sd * 2, hi + sd * 2, 5);
+
+    const fr = frame({
+      w: 760, h: 300, pad: { l: 70, r: 20, t: 20, b: 46 },
+      xdom: [0.4, vals.length + 0.6], ydom: [nd.lo, nd.hi], yticks: nd.ticks,
+      yfmt: v => v.toFixed(4),
+      xticks: vals.map((v, i) => ({ v: i + 1, label: "s" + (i + 1) })), xgrid: true,
+      ylabel: lab, xlabel: "refit (identical configuration, different random_state)"
+    });
+
+    /* The +/-1 SD band is the message, so it is drawn before the points. */
+    fr.g.appendChild(el("rect", {
+      x: fr.ix[0], y: fr.y(mu + sd), width: fr.ix[1] - fr.ix[0],
+      height: Math.abs(fr.y(mu - sd) - fr.y(mu + sd)),
+      style: "fill:" + C.acc + ";opacity:.12" }));
+    hline(fr, mu, C.acc, "4 3", "mean " + f4(mu));
+    vals.forEach((v, i) => {
+      fr.g.appendChild(el("line", { x1: fr.x(i + 1), x2: fr.x(i + 1),
+        y1: fr.y(mu), y2: fr.y(v), style: "stroke:var(--bd2);stroke-width:1" }));
+      dot(fr, i + 1, v, v === hi || v === lo ? C.warn : C.acc2, 4.6,
+        "refit " + (i + 1) + ": " + f5(v) + "  (" + sg(v - mu, 5) + " from the mean)");
+    });
+
+    /* Overlay the DeLong SE of a single AUC estimate for comparison: seed
+       noise against sampling noise, on the same axis. */
+    if (mode === "auc" && DL.tuned_vs_pay0_rule) {
+      const se = 0.007;
+      hline(fr, mu + se, C.ink3, "1 3", "+1 test-set SE \u2248 " + se.toFixed(3));
+      hline(fr, mu - se, C.ink3, "1 3", null);
+    }
+    drawInto("sv-chart", fr);
+
+    $("#sv-mean").textContent  = f4(mu);
+    $("#sv-range").textContent = f4(hi - lo);
+    $("#sv-min").textContent   = f4(lo);
+    $("#sv-max").textContent   = f4(hi);
+
+    let txt = "Ten refits, identical hyperparameters, identical data, only random_state " +
+      "differing. " + lab + " spans " + f4(hi - lo) + " with SD " + f4(sd) + ". ";
+    if (mode === "auc") {
+      txt += "This is the yardstick for every comparison in the report: the encoding ablation's " +
+        "whole spread is " + f4(AB.encoding.spread) + ", which is " +
+        (AB.encoding.spread / sd).toFixed(1) + "\u00d7 this SD \u2014 so the encoding arms are " +
+        "not distinguishable from reseeding the same model. The dotted lines mark \u00b1 one " +
+        "test-set sampling SE (\u22480.007 at 1,324 positives); seed noise is the smaller of the " +
+        "two sources, which is worth knowing because it is the one you control. The DeLong " +
+        "difference against the PAY_0 baseline is " + f4(DL.tuned_vs_pay0_rule.diff) +
+        ", roughly " + (DL.tuned_vs_pay0_rule.diff / sd).toFixed(0) +
+        "\u00d7 the seed SD, which is why that comparison survives and the small ones do not.";
+    } else {
+      txt += "Brier is the more stable of the two under reseeding in relative terms, because it " +
+        "is an average over every prediction rather than a rank statistic concentrated near the " +
+        "decision boundary.";
+    }
+    $("#sv-note").textContent = txt;
+  }
+
+  seg("sv-seg", "data-m", draw);
+  REDRAW.push(() => { const b = $("#sv-seg button.on"); if (b) draw(b.getAttribute("data-m")); });
+}
+
+/* ===================================== 29. DeLong table (#dl-tbl) */
+const DL_NAME = {
+  tuned_vs_pay0_rule:       "tuned XGBoost vs PAY_0 single-rule baseline",
+  tuned_vs_no_pay0:         "tuned XGBoost vs the same model without PAY_0",
+  tuned_vs_library_defaults: "tuned XGBoost vs XGBoost at library defaults"
+};
+function buildDelongTable() {
+  const keys = Object.keys(DL);
+  fillTable("dl-tbl", keys.map(k => Object.assign({ key: k }, DL[k], {
+    __cls: k === "tuned_vs_pay0_rule" ? "hi" : null
+  })), [
+    { k: "key", fmt: v => DL_NAME[v] || v },
+    { k: "auc_a", cls: "num", fmt: v => f4(v) },
+    { k: "auc_b", cls: "num", fmt: v => f4(v) },
+    { k: "diff", cls: "num good", fmt: (v, r) => "<strong>" + f4(v) + "</strong>" +
+        '<br><span class="small muted">SE ' + f4(r.se) + "</span>" },
+    { k: "ci95", cls: "num muted", fmt: v => "[" + f4(v[0]) + ", " + f4(v[1]) + "]" },
+    { k: "z", cls: "num", fmt: v => f2(v) },
+    { k: "p_value", cls: "num", fmt: v => v < 1e-12 ? "&lt; 1e\u221212" : sci(v, 3) }
+  ]);
+}
+
+/* ===================================== 30. version table (#ver-tbl) */
+const VER_ORDER = ["python", "numpy", "pandas", "scipy", "sklearn", "xgboost",
+                   "optuna", "shap", "imblearn", "matplotlib", "statsmodels"];
+function buildVersionTable() {
+  const v = M.versions;
+  const keys = VER_ORDER.filter(k => v[k] !== undefined)
+    .concat(Object.keys(v).filter(k => VER_ORDER.indexOf(k) < 0));
+  fillTable("ver-tbl", keys.map(k => ({ c: k, v: v[k] })), [
+    { k: "c", fmt: x => "<code>" + x + "</code>" },
+    { k: "v", fmt: x => x === null || x === undefined ? "not installed" : String(x) }
+  ]);
+}

@@ -4,20 +4,38 @@
 # The .venv directory itself is NOT committed: it is ~561 MB across 21,510 files,
 # contains platform-specific compiled binaries, and hardcodes absolute paths.
 # This file is what makes the environment reproducible instead.
+#
+# On Windows, create the venv at a short path (e.g. C:\Users\<you>\venvs\dm314).
+# shap depends on jedi via ipykernel, whose bundled type stubs exceed the 260-character
+# MAX_PATH limit when the venv sits inside a deeply nested course directory.
 
 # --- Notebook runtime ---
-pandas==3.0.5
-numpy==2.5.2
-matplotlib==3.11.1
-scipy==1.18.0
+pandas==3.0.6
+numpy==2.5.3
+matplotlib==3.11.2
+scipy==1.18.1
 ucimlrepo==0.0.7
 
 # --- Required to run the notebook as a Jupyter kernel ---
-ipykernel==7.3.0
+ipykernel==7.4.0
 
-# --- Phase 2 (PCA and mutual-information analysis); not yet used in Phase 1 ---
-scikit-learn==1.9.0
+# --- Modelling ---
+scikit-learn==1.9.1
 
 # --- Only needed to execute the notebook headlessly from the CLI ---
 nbconvert==7.17.1
 nbformat==5.11.1
+
+# --- Phase 2 ---
+# Gradient-boosted trees: the algorithm implemented in Phase 2.
+xgboost==3.4.1
+# Post-hoc explainability (TreeSHAP). Pulls numba + llvmlite.
+shap==0.52.0
+# Hyperparameter search (TPE sampler, median pruning, SQLite study persistence).
+optuna==5.0.0
+# SMOTE, evaluated and rejected on semantic grounds in the imbalance study.
+imbalanced-learn==0.14.2
+# DeLong-adjacent statistics and distribution utilities for significance testing.
+statsmodels==0.15.0
+# Builds the submitted .docx from the Markdown report (report/build_docx.py).
+python-docx==1.2.0

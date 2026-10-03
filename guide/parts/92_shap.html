@@ -1,0 +1,502 @@
+<section id="s-shap" data-title="SHAP: explaining the model">
+<h2><span class="kicker">Section 11</span>SHAP: making an ensemble auditable</h2>
+
+<p class="lede">§6 established that the gain from boosting costs you direct readability. Research
+question 2 asks whether a post-hoc explanation can buy it back well enough for a regulator. That
+is a strong claim, so it needs a strong method — not a heuristic importance score, but an
+attribution with a uniqueness theorem behind it. This section builds SHAP from cooperative game
+theory, explains why it is computable on a tree ensemble at all, and then shows the model
+independently rediscovering a Phase 1 finding it was never told about.</p>
+
+<h3>11.1 The problem, stated precisely</h3>
+
+<p>The model outputs a number for one client. You want to split that number into 23 pieces, one
+per feature, such that the pieces sum to the output and each piece honestly represents that
+feature's contribution. Written down:</p>
+
+<div class="eq">f(x) = φ<sub>0</sub> + Σ<sub>j=1..23</sub> φ<sub>j</sub><span class="n">(24)</span></div>
+
+<dl class="vardef">
+<dt>f(x)</dt><dd>the model's output for this one client</dd>
+<dt>φ<sub>0</sub></dt><dd>the <em>base value</em> — the output expected before seeing any feature</dd>
+<dt>φ<sub>j</sub></dt><dd>the contribution of feature <em>j</em>, positive or negative</dd>
+</dl>
+
+<p>This is an <strong>additive feature attribution</strong>. The constraint that the pieces sum
+exactly to the output is what makes it auditable: nothing is unexplained, there is no residual
+"and then the model did something else".</p>
+
+<div class="box trap">
+  <div class="bt">Why the obvious approaches fail</div>
+  <p><strong>"Drop the feature and see how much the prediction moves."</strong> This depends
+  entirely on what you drop it <em>with</em>. If <code>PAY_0</code> and <code>PAY_2</code> both
+  encode delinquency, dropping either one alone changes almost nothing (the other covers for it),
+  so both look unimportant — yet dropping both is catastrophic. Marginal removal does not sum to
+  the whole.</p>
+  <p><strong>"Add the features one at a time and credit each with the jump."</strong> Better, but
+  now the answer depends on the <em>order</em> you add them. Twenty-three features admit 23!
+  orderings and they do not agree.</p>
+  <p style="margin-bottom:0">The resolution is the one Shapley found in 1953 for a different
+  problem: <strong>average over all orderings</strong>. That removes the arbitrariness by
+  construction rather than by convention.</p>
+</div>
+
+<h3>11.2 The Shapley value, and why uniqueness matters</h3>
+
+<p>Cooperative game theory asks: <em>n</em> players cooperate to produce a payout; how should the
+payout be divided fairly? Map that onto the model: the players are the features, a coalition
+<em>S</em> is a subset of features, and the payout <em>v(S)</em> is the model's expected output
+when only the features in <em>S</em> are known. The Shapley value of player <em>j</em> is its
+average marginal contribution across every coalition it could join:</p>
+
+<div class="eq left">φ<sub>j</sub> &nbsp;=&nbsp; Σ<sub>S ⊆ F \ {j}</sub> &nbsp;
+[ |S|! · (|F| − |S| − 1)! / |F|! ] &nbsp; · &nbsp; [ v(S ∪ {j}) − v(S) ]<span class="n">(25)</span></div>
+
+<dl class="vardef">
+<dt>F</dt><dd>the full feature set, |F| = 23</dd>
+<dt>S</dt><dd>a coalition not containing <em>j</em> — the features already "revealed"</dd>
+<dt>v(S ∪ {j}) − v(S)</dt><dd><em>j</em>'s marginal contribution when it joins coalition <em>S</em></dd>
+<dt>the bracketed weight</dt><dd>the fraction of the 23! orderings in which exactly the members of
+<em>S</em> precede <em>j</em> — this is what turns "it depends on the order" into a well-defined
+average</dd>
+</dl>
+
+<p>The reason to care is not that this formula is intuitive. It is that it is
+<strong>unique</strong>. Shapley proved it is the only attribution satisfying four properties
+simultaneously, and Lundberg &amp; Lee (2017) imported that proof into machine learning:</p>
+
+<div class="tw"><table>
+<thead><tr><th>Axiom</th><th>What it says</th><th>Why an auditor needs it</th></tr></thead>
+<tbody>
+<tr><td><strong>Local accuracy</strong><br><span class="muted">(efficiency)</span></td>
+  <td>The attributions sum exactly to the prediction, equation (24)</td>
+  <td>Nothing is unaccounted for. A decision cannot be partly unexplained.</td></tr>
+<tr><td><strong>Missingness</strong></td>
+  <td>A feature that is absent gets attribution zero</td>
+  <td>The model cannot be credited for information it did not have.</td></tr>
+<tr><td><strong>Consistency</strong><br><span class="muted">(monotonicity)</span></td>
+  <td>If a feature's marginal contribution is at least as large in model B as in model A for every
+  coalition, its attribution in B is at least as large</td>
+  <td>This is the one <code>gain</code> and <code>weight</code> violate — §12 shows them
+  disagreeing with each other, and this axiom is why that disagreement is not symmetric.</td></tr>
+<tr><td><strong>Symmetry</strong></td>
+  <td>Two features that contribute identically in every coalition receive identical attribution</td>
+  <td>Identical evidence is treated identically — the formal version of non-arbitrariness.</td></tr>
+</tbody></table></div>
+
+<div class="box key">
+  <div class="bt">The argument this licenses, in one sentence</div>
+  <p style="margin-bottom:0">"I used SHAP" is not an appeal to popularity. The claim available is:
+  <em>any</em> attribution method satisfying those four properties <em>is</em> SHAP, so choosing a
+  different method means giving one of them up — and you must then name which one. That is a much
+  stronger position in a viva than "SHAP is the standard tool", and it is the kind of reasoning
+  the Solution section rewards.</p>
+</div>
+
+<h3>11.3 Why this is computable, and in which space</h3>
+
+<p>Equation (25) sums over all 2²³ ≈ 8.4 million coalitions, for every one of 2,000 clients. That
+is hopeless in general — exact Shapley values are NP-hard. <strong>TreeSHAP</strong> (Lundberg et
+al., 2020) exploits the structure of a tree to get the exact answer in polynomial time.</p>
+
+<div class="box deriv">
+  <div class="bt">The structural insight</div>
+  <p>For a decision tree, <em>v(S)</em> has a closed form: push the client down the tree, and at
+  any node that splits on a feature <strong>not</strong> in <em>S</em>, follow <em>both</em>
+  children, weighting each by its training-data coverage. The expectation over unknown features
+  becomes a weighted walk, not a Monte-Carlo integral.</p>
+  <p style="margin-bottom:0">TreeSHAP then pushes all coalitions down the tree
+  <em>simultaneously</em>, carrying a bookkeeping structure that tracks, at each node, the weight
+  each coalition size contributes. Cost drops from O(2<sup>M</sup>) to
+  <strong>O(T · L · D²)</strong> — trees × leaves × depth². With
+  <span data-v="n-trees"></span> trees at depth ≤ <span data-v="bp-max_depth"></span>, that is
+  seconds, not geological time. Exact, not sampled: this is why the additivity check below passes
+  to machine precision rather than to a tolerance.</p>
+</div>
+
+<h4>Explanations are computed in log-odds space</h4>
+
+<p>XGBoost's raw output is a <strong>margin</strong>: the sum of leaf weights across all trees,
+which is a log-odds value. The probability is obtained afterwards by the logistic link:</p>
+
+<div class="eq">p = σ(m) = 1 / (1 + e<sup>−m</sup>) &nbsp;&nbsp;&nbsp; m = Σ<sub>t</sub> f<sub>t</sub>(x)<span class="n">(26)</span></div>
+
+<p>The margin is a <em>sum over trees</em>, so additivity (24) holds exactly in margin space.
+σ is non-linear, so it does <strong>not</strong> commute with addition:</p>
+
+<div class="eq left">σ(φ<sub>0</sub> + φ<sub>1</sub> + φ<sub>2</sub>) &nbsp;≠&nbsp;
+σ(φ<sub>0</sub>) + σ(φ<sub>1</sub>) + σ(φ<sub>2</sub>)<span class="n">(27)</span></div>
+
+<div class="box why">
+  <div class="bt">The consequence, and the one exception made</div>
+  <p>Attributions in probability space are <em>not</em> additive, so a probability-space
+  "explanation" of a sum is internally inconsistent — the pieces cannot be added up or compared
+  across clients, because the same log-odds contribution maps to a different probability shift
+  depending on where on the sigmoid the client sits. A client already at p = 0.85 and one at
+  p = 0.03 experience the same +0.5 log-odds completely differently.</p>
+  <p style="margin-bottom:0">So <code>exp11</code> computes and reports everything in
+  <strong>log-odds (margin)</strong> space, verified: the maximum deviation of Σφ from the model
+  margin across all <span data-v="shap-n"></span> explained rows is
+  <strong><span data-v="shap-additivity"></span></strong>, which is floating-point noise. The
+  single exception is the individual client waterfall in §11.8, where a probability is what a
+  human actually wants to see — and there the non-additivity of the transform is stated on the
+  figure rather than hidden.</p>
+</div>
+
+<h3>11.4 Interventional or path-dependent: two definitions of "absent"</h3>
+
+<p>Equation (25) needs <em>v(S)</em> — the expected output when only <em>S</em> is known. "Only
+<em>S</em> is known" has two reasonable formalisations, and <code>shap</code> implements both.</p>
+
+<div class="tw"><table>
+<thead><tr><th></th><th><code>interventional</code></th><th><code>tree_path_dependent</code></th></tr></thead>
+<tbody>
+<tr><td><strong>Absent features are…</strong></td>
+  <td>replaced by values drawn from a <em>background dataset</em></td>
+  <td>marginalised using the <em>training coverage stored in the tree</em></td></tr>
+<tr><td><strong>Needs data?</strong></td><td>yes — <span data-v="shap-bg"></span> rows</td>
+  <td>no — reads the model only</td></tr>
+<tr><td><strong>Causal reading</strong></td>
+  <td>Pearl's do-operator: breaks dependence between present and absent features</td>
+  <td>respects the observed correlation structure</td></tr>
+<tr><td><strong>Collinearity behaviour</strong></td>
+  <td>credit assigned to the feature actually used by the split</td>
+  <td>credit shared with correlated features through the coverage weights</td></tr>
+<tr><td><strong>Speed</strong></td><td>slower (O(background))</td><td>faster</td></tr>
+</tbody></table></div>
+
+<p><code>interventional</code> is used, with a <strong><span data-v="shap-bg"></span>-row
+stratified background sample</strong> drawn from the <em>training</em> portion. Three reasons,
+in order of weight:</p>
+
+<ol>
+<li><strong>It is the definition that matches the audit question.</strong> An auditor asks "what
+did <em>this</em> feature value do to <em>this</em> decision". The interventional expectation
+answers exactly that, because it severs the feature from its correlates instead of letting the
+answer leak through them.</li>
+<li><strong>The dataset is collinear by construction.</strong> <code>BILL_AMT1–6</code> carry VIF
+<span class="muted">13.9–25.7</span> (Phase 1 Fig 2.14). Path-dependent attribution spreads credit
+across that whole block through coverage, which makes the per-column numbers even harder to
+interpret than they already are (§11.9).</li>
+<li><strong>The background comes from train, not test.</strong> Using test rows to define the
+reference distribution would make the explanation depend on the held-out set's composition. The
+background is a property of the <em>population the model was fitted to</em>.</li>
+</ol>
+
+<div class="box mark">
+  <div class="bt">The cross-check, and why it is worth one line</div>
+  <p style="margin-bottom:0">Both perturbations were computed and their global rankings compared:
+  Spearman <strong>ρ = <span data-v="shap-pathrho"></span></strong>. So the choice between them is
+  <em>not</em> load-bearing for any conclusion drawn in this report — the ranking is essentially
+  the same either way. That is exactly what should be reported: a design decision defended on
+  principle, plus evidence that the principle did not have to carry the result. Had the two
+  disagreed, every global claim would need re-stating with a caveat.</p>
+</div>
+
+<h3>11.5 What is explained, and why it is the test set</h3>
+
+<p>SHAP is computed on <strong><span data-v="shap-n"></span> stratified rows of the held-out test
+set</strong>, not on training data. §5.6's licensing table permits exactly this, and the
+permission is not a loophole — it is the point:</p>
+
+<div class="flow">
+  <div class="step"><div class="i">1</div><div class="t">
+    <b>Explaining held-out decisions <em>is</em> the auditability argument.</b> A regulator does
+    not ask why the model fitted its training set. They ask why it declined
+    <em>this applicant</em> — a person the model has never seen. Explaining training rows would
+    answer a question nobody asked.
+  </div></div>
+  <div class="step"><div class="i">2</div><div class="t">
+    <b>It selects nothing.</b> No hyperparameter, no feature set, no threshold is chosen from
+    these values. The model is already frozen (§7), the threshold is already frozen from
+    out-of-fold data (§5.5). SHAP is a read-only operation on a finished artefact, so it cannot
+    leak optimism into the reported performance.
+  </div></div>
+  <div class="step"><div class="i">3</div><div class="t">
+    <b>Stratified, so the minority class is actually represented.</b> At 22% prevalence an
+    unstratified 2,000-row sample would still contain plenty of defaults, but stratifying removes
+    sampling noise from the group shares and makes the <code>PAY_0</code> profile below stable at
+    the sparse high codes.
+  </div></div>
+</div>
+
+<h3>11.6 The global picture: what the model actually uses</h3>
+
+<p>Averaging |φ<sub>j</sub>| across the explained rows gives a global importance that inherits the
+local method's guarantees — unlike <code>gain</code> or <code>weight</code>, which are computed
+from tree structure on <em>training</em> loss and have no local counterpart at all (§12.2).</p>
+
+<div class="tw"><table>
+<thead><tr><th class="num">#</th><th>Feature</th><th>Group</th>
+<th class="num">mean|SHAP|</th><th class="num">share</th><th class="num">mean SHAP (signed)</th>
+<th class="num">path-dep.</th></tr></thead>
+<tbody id="shap-tbl"></tbody></table></div>
+<p class="cap">Top 12 of 23 rows from <code>results/exp11_shap.json</code>, log-odds units.
+<em>share</em> is the feature's fraction of total attribution mass. The signed mean is near zero
+for most features — that is expected and is not a bug: it means the feature pushes some clients up
+and others down, which is what a useful feature does. A large signed mean would indicate a feature
+that shifts <em>everyone</em> in one direction, i.e. an intercept in disguise.</p>
+
+<div class="box key">
+  <div class="bt">Three readings worth having ready</div>
+  <ol>
+  <li><strong><code>PAY_0</code> dominates — <span data-v="shap-pay0-share"></span> of all
+  attribution mass</strong> in a 23-feature model. That independently corroborates §10.3's group
+  ablation and §10.4's recency finding, from the model's internals rather than from a
+  leave-columns-out experiment. Three methods, one conclusion.</li>
+  <li><strong>Repayment status carries <span data-v="shap-group-pay"></span> of total attribution;
+  the six <code>BILL_AMT</code> columns carry <span data-v="shap-group-bill"></span>.</strong>
+  Phase 1 recommended prioritising status features over monetary ones. This is that
+  recommendation, validated after the fact by the fitted model.</li>
+  <li><strong><code>LIMIT_BAL</code> places second</strong> at
+  <span data-v="shap-limit-abs"></span>, with a negative signed mean
+  (<span data-v="shap-limit-signed"></span>) — higher limits push <em>towards</em> non-default.
+  That is almost certainly reverse causation rather than a mechanism: the bank granted large
+  limits to clients it had already assessed as low-risk, so <code>LIMIT_BAL</code> is partly a
+  record of a <em>previous</em> credit decision. §11.9's second caveat is exactly about this
+  distinction, and it is the single most important thing to say out loud about this row.</li>
+  </ol>
+</div>
+
+<h3>11.7 The <code>PAY_0</code> dependence plot — convergent validation</h3>
+
+<p>This is the most valuable figure in the submission, and the reason is worth being precise
+about. Phase 1 measured, in the raw data, that the default rate is <em>non-monotonic</em> in
+<code>PAY_0</code>: it <em>falls</em> from code −2 to code 0, then climbs steeply from code 1
+onward. The model was never told <code>PAY_n</code> is ordinal, never given that shape as a
+constraint, never shown the EDA. If its internal attributions reproduce the curve, that is two
+independent routes to the same structure.</p>
+
+<div class="widget">
+  <div class="wt">Interactive · SHAP against observed reality, per <code>PAY_0</code> code</div>
+  <p class="wd">Bars are <strong>mean SHAP in log-odds</strong> (the model's internal view); the
+  line is the <strong>observed default rate</strong> in the same rows (the data's view). The two
+  were computed by completely different routes. Hover a code for its population — note that codes
+  4, 5 and 8 have single-digit counts, which is why the far right of both series is noisy and why
+  the rank correlation is <span data-v="shap-pay0rho"></span> rather than 1.0.</p>
+  <div class="seg" id="sp-seg">
+    <button data-m="both" class="on">both series</button
+    ><button data-m="shap">SHAP only</button
+    ><button data-m="rate">observed rate only</button>
+  </div>
+  <svg class="chart" id="sp-chart" viewBox="0 0 760 390" role="img"
+       aria-label="Mean SHAP value and observed default rate by PAY_0 code"></svg>
+  <div class="readout">
+    <div class="ro acc"><div class="l">Spearman ρ</div><div class="v" data-v="shap-pay0rho"></div></div>
+    <div class="ro"><div class="l">Sign flip at</div><div class="v">code 0 → 1</div></div>
+    <div class="ro"><div class="l">Rows explained</div><div class="v" data-v="shap-n"></div></div>
+    <div class="ro"><div class="l">Codes present</div><div class="v">9</div></div>
+  </div>
+  <p class="small muted" id="sp-note" style="margin:11px 0 0"></p>
+</div>
+
+<div class="box why">
+  <div class="bt">What the shape proves, step by step</div>
+  <ol>
+  <li><strong>The dip is recovered.</strong> Mean SHAP is most negative at code <strong>0</strong>
+  (<span data-v="sp-shap0"></span>), not at code −2 (<span data-v="sp-shapm2"></span>). A monotone
+  model <em>could not</em> produce that ordering. §2 argued that code −2 ("no transaction
+  recorded") describes a dormant account rather than a well-behaved one, so it should be
+  <em>less</em> reassuring than code 0 ("paid the revolving balance"). The model agrees, and it
+  worked that out from the labels alone.</li>
+  <li><strong>The sign flip lands in the right place.</strong> Attribution crosses zero between
+  code 0 and code 1 — exactly where the observed rate crosses the base rate of
+  <span data-v="prevalence-pct"></span>. The model's internal notion of "worse than average"
+  coincides with the data's.</li>
+  <li><strong>The magnitude tracks the severity.</strong> Code 2 attracts
+  <span data-v="sp-shap2"></span> log-odds, roughly six times code 1's
+  <span data-v="sp-shap1"></span>, mirroring the jump in observed rate from
+  <span data-v="sp-rate1"></span> to <span data-v="sp-rate2"></span>. The model is not merely
+  ordering the codes, it is scaling them.</li>
+  <li><strong>And the correlation is not 1.0, which is informative rather than embarrassing.</strong>
+  Codes 4, 5 and 8 hold 6, 1 and 1 rows. Their observed "rates" are 0.5, 1.0 and 0.0 — one or two
+  clients each. The model, regularised by <code>min_child_weight</code> =
+  <span data-v="bp-min_child_weight"></span>, refuses to chase those points and shrinks them
+  towards the behaviour of nearby codes. ρ = <span data-v="shap-pay0rho"></span> is therefore
+  partly a measure of the model <em>declining to overfit</em>, and reporting it with that
+  explanation is better than reporting a flattering number computed on codes −2 to 2 only.</li>
+  </ol>
+</div>
+
+<div class="box mark">
+  <div class="bt">Why this is the figure to defend in the viva</div>
+  <p style="margin-bottom:0">It closes the loop between the two phases. Phase 1 found a pattern in
+  the data; Phase 2 shows the model found the same pattern independently and can be
+  <em>interrogated</em> about it after the fact. That is the auditability claim demonstrated rather
+  than asserted — and it is simultaneously a sanity check on the pipeline, because a model that
+  disagreed with the EDA here would be evidence of a bug (a mis-mapped column, a label polarity
+  flip, a scrambled index), not of a subtle insight.</p>
+</div>
+
+<h3>11.8 Local explanations: one success and one failure</h3>
+
+<p>Global importance answers "what does the model use". An audit asks "why
+<em>this</em> decision". The waterfall decomposes a single client's margin into equation (24)'s
+terms, ordered by magnitude, and the report carries a <strong>pair</strong> — deliberately
+including a case the model got wrong.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Case</th><th class="num">test row</th><th class="num">p̂</th><th class="num">actual</th>
+<th>Decision at τ = <span data-v="imb-b-tau"></span></th><th>What it demonstrates</th></tr></thead>
+<tbody>
+<tr><td><strong>True positive</strong></td><td class="num" data-v="shap-tp-row"></td>
+  <td class="num" data-v="shap-tp-p"></td><td class="num">default</td><td>flagged ✓</td>
+  <td>The explanation is legible: a handful of large positive terms, each a feature value a human
+  can check against the statement.</td></tr>
+<tr class="hi"><td><strong>False negative</strong></td><td class="num" data-v="shap-fn-row"></td>
+  <td class="num" data-v="shap-fn-p"></td><td class="num">default</td><td>not flagged ✗</td>
+  <td>The model assigned <span data-v="shap-fn-p"></span> — confidently wrong. The waterfall shows
+  <em>why</em> it was confident, and the answer is that every observable feature looked fine.</td></tr>
+</tbody></table></div>
+
+<div class="box key">
+  <div class="bt">The false negative is the more persuasive of the two</div>
+  <p>Explaining a correct prediction is weak evidence — the explanation and the outcome agree, so
+  you cannot tell whether the method is informative or merely consistent. Explaining an
+  <em>error</em> is a real test: either the attribution reveals the model keying on something
+  indefensible, or it reveals that the failure was not the model's to avoid.</p>
+  <p style="margin-bottom:0">Row <span data-v="shap-fn-row"></span> is the second case. The client
+  carried a clean recent repayment record, so every feature the model can observe pushed the
+  margin down, and the aggregate was <span data-v="shap-fn-p"></span>. Then they defaulted. No
+  reweighting, no threshold, no additional tree recovers this case, because <strong>the
+  information required is not in the feature set</strong> — a six-month billing snapshot cannot
+  observe redundancy, illness or divorce. This single row is the most concrete form of §14's
+  feature-set-ceiling argument, and it is far more convincing than the learning curve because it
+  is a specific identifiable person rather than an aggregate.</p>
+</div>
+
+<h3>11.9 Two caveats that must travel with every SHAP claim</h3>
+
+<div class="box trap">
+  <div class="bt">Caveat 1 — collinearity makes per-column <code>BILL_AMT</code> numbers unstable</div>
+  <p><code>BILL_AMT1</code> through <code>BILL_AMT6</code> carry VIF <strong>13.9–25.7</strong>
+  (Phase 1 Fig 2.14): consecutive monthly balances are nearly the same number. When several
+  features carry near-identical information, a tree splits on whichever one happened to be
+  available under <code>colsample_bytree</code> = <span data-v="bp-colsample_bytree"></span>, and
+  TreeSHAP faithfully credits the column that was used. <strong>The split between members of the
+  block is therefore partly arbitrary.</strong></p>
+  <p>This is a statement about <em>attribution</em>, not about <em>prediction</em>. §10's ablations
+  confirm the predictive consequence is nil — collinearity does not hurt a tree ensemble, which is
+  why the columns are kept and why dropping them "because VIF is high" would have been the wrong
+  move (§10.3).</p>
+  <p style="margin-bottom:0"><strong>The disciplined reading:</strong> <code>BILL_AMT1</code> at
+  rank 3 is not "the first bill matters and the others do not". It is "the balance block carries
+  <span data-v="shap-group-bill"></span> of the attribution and the model needs one representative
+  of it". §12 quantifies the arbitrariness directly: across five reseeded refits the
+  <code>BILL_AMT</code> columns show mean rank SD <strong>1.73</strong> against <strong>1.16</strong>
+  for everything else. Predicted from the VIF, measured in the stability experiment.</p>
+</div>
+
+<div class="box trap">
+  <div class="bt">Caveat 2 — SHAP attributes the model, not the world</div>
+  <p>SHAP answers <em>"why did this model produce that output?"</em>. It does not answer
+  <em>"what would happen if we changed this feature?"</em>. The second is a causal question and
+  needs an intervention, not an attribution.</p>
+  <p><code>LIMIT_BAL</code> makes the distinction concrete. Its attribution is strongly negative
+  for high limits. The causal reading — "raise this client's limit and they become less likely to
+  default" — is almost certainly backwards: the bank granted a high limit <em>because</em> it had
+  already judged the client low-risk, so the feature partly encodes a prior credit decision. SHAP
+  cannot distinguish the two readings, and nothing in the SHAP machinery warns you.</p>
+  <p style="margin-bottom:0"><strong>Why this still satisfies research question 2.</strong> Q2 asks
+  about <em>decision auditability</em> — can the institution explain, defensibly and
+  reproducibly, why an applicant was declined? That is exactly the "why did this model decide
+  that" question, and it is the one SHAP answers with a uniqueness theorem behind it. An
+  adverse-action notice is a statement about the decision process, not a causal counterfactual. So
+  the scope limitation is real and must be stated, but it does not undercut the claim being made.
+  Overstating this is the most common way a good SHAP section loses marks.</p>
+</div>
+
+<h3>11.10 The code</h3>
+
+<div class="codehdr"><span class="fn">experiments/exp11_shap.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="c"># Background: stratified, from TRAIN. Defines "absent" for the interventional</span>
+<span class="c"># expectation, so it must describe the fitted population, not the held-out one.</span>
+bg_idx = <span class="f">resample</span>(
+    tr_idx, n_samples=<span class="n">1000</span>, replace=<span class="k">False</span>,
+    stratify=y[tr_idx], random_state=SEED,
+)
+
+explainer = shap.<span class="f">TreeExplainer</span>(
+    model,
+    data=X.<span class="f">iloc</span>[bg_idx],              <span class="c"># required by interventional</span>
+    feature_perturbation=<span class="s">"interventional"</span>,
+    model_output=<span class="s">"raw"</span>,              <span class="c"># log-odds margin -> exactly additive</span>
+)
+
+<span class="c"># Explain HELD-OUT rows: auditing decisions the model has never seen.</span>
+sv = explainer.<span class="f">shap_values</span>(X.<span class="f">iloc</span>[ex_idx], check_additivity=<span class="k">True</span>)
+
+<span class="c"># Assert the uniqueness guarantee rather than trusting it. If local accuracy</span>
+<span class="c"># fails, every downstream number is meaningless, so this is a hard gate.</span>
+margin = model.<span class="f">predict</span>(X.<span class="f">iloc</span>[ex_idx], output_margin=<span class="k">True</span>)
+err = np.<span class="f">abs</span>(sv.<span class="f">sum</span>(axis=<span class="n">1</span>) + explainer.expected_value - margin).<span class="f">max</span>()
+<span class="k">assert</span> err &lt; <span class="n">1e-5</span>, <span class="s">f"additivity violated: {err:.2e}"</span>
+
+<span class="c"># Cross-check the perturbation choice is not load-bearing (rho = 0.973).</span>
+pd_sv = shap.<span class="f">TreeExplainer</span>(
+    model, feature_perturbation=<span class="s">"tree_path_dependent"</span>
+).<span class="f">shap_values</span>(X.<span class="f">iloc</span>[ex_idx])
+rho = spearmanr(
+    np.<span class="f">abs</span>(sv).<span class="f">mean</span>(<span class="n">0</span>), np.<span class="f">abs</span>(pd_sv).<span class="f">mean</span>(<span class="n">0</span>)
+).statistic
+</code></pre>
+
+<div class="box why">
+  <div class="bt">Three details in that excerpt worth naming</div>
+  <ul style="margin-bottom:0">
+  <li><code>model_output="raw"</code> is what selects margin space. The default for a classifier
+  would hand back probability-space values and silently break additivity (§11.3).</li>
+  <li><code>check_additivity=True</code> is <code>shap</code>'s own internal check; the explicit
+  <code>assert</code> afterwards is deliberately redundant, because it is the one invariant whose
+  failure invalidates the entire section, and §5.7's verification list requires it to be
+  mechanically checked rather than assumed.</li>
+  <li>The path-dependent explainer takes <strong>no</strong> <code>data=</code> argument — it reads
+  coverage out of the serialised model. That asymmetry in the API <em>is</em> the difference
+  between the two definitions of "absent", visible in the function signature.</li>
+  </ul>
+</div>
+
+<details class="q"><summary>Self-check: if SHAP is unique and provably fair, why does §12 bother testing its stability?</summary>
+<div class="dbody">
+<p>Because the uniqueness theorem is conditional on the model. SHAP gives the unique fair
+attribution <em>for a given fitted model</em>. It says nothing about whether a <em>differently
+seeded</em> fit of the same configuration on the same data produces similar attributions.</p>
+<p>Those are different claims, and only the second one is what an audit trail requires. If
+re-running the pipeline with <code>random_state=43</code> reordered the top ten features, then the
+explanation handed to a regulator would be an artefact of an arbitrary integer — provably fair with
+respect to a model that was itself arbitrary. That is why §12 exists, and why it is framed as
+testing whether the explanation is <em>fit for audit</em> rather than whether SHAP is
+<em>correct</em>.</p>
+</div></details>
+
+<details class="q"><summary>Self-check: could you have used LIME instead, or permutation importance?</summary>
+<div class="dbody">
+<p><strong>LIME</strong> fits a sparse linear surrogate in a neighbourhood of the client. It is
+model-agnostic, which is its appeal, but the explanation depends on a kernel width and a sampling
+distribution, both chosen by the analyst, and it satisfies local accuracy only approximately. Two
+analysts can produce two different LIME explanations of the same decision without either making an
+error. For a regulatory artefact that is a serious weakness, and for a tree ensemble it also gives
+up a large advantage: exactness is <em>available</em> here, so approximating is a pure loss.</p>
+<p><strong>Permutation importance</strong> is global only — it cannot explain an individual
+decision, which is the actual requirement. It is still computed in §12 as one of five importance
+measures, because it is held-out and prediction-based and therefore the natural partner to SHAP in
+the agreement analysis. But it cannot answer "why was this applicant declined", so it cannot stand
+in for SHAP here.</p>
+</div></details>
+
+<details class="q"><summary>Self-check: the explained sample is 2,000 rows, not all 5,989. Does that weaken anything?</summary>
+<div class="dbody">
+<p>Not materially, and the reason is that every quantity reported from it is an average. The
+standard error of <code>mean|SHAP|</code> over 2,000 stratified rows is small relative to the gaps
+being discussed — <code>PAY_0</code> at <span data-v="shap-pay0-abs"></span> against
+<code>LIMIT_BAL</code> at <span data-v="shap-limit-abs"></span> is not a margin that 4,000 rows
+would overturn.</p>
+<p>Where the sample size <em>does</em> bite is the sparse <code>PAY_0</code> codes: 4, 5 and 8 hold
+6, 1 and 1 rows respectively, and the full test set would roughly treble those counts while leaving
+them far too thin to be read as rates. That limitation is a property of the data — code 5 is rare in
+the population, not rare in the sample — so it is reported in §11.7 rather than fixed by explaining
+more rows. The interaction values in §12 are the part that is genuinely runtime-bound, and that is
+where the sampling decision actually pays for itself.</p>
+</div></details>
+
+</section>

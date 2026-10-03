@@ -1,0 +1,620 @@
+<section id="s-code" data-title="The implementation">
+<h2><span class="kicker">Section 15</span>The implementation: reading the code</h2>
+
+<p class="lede">Everything up to here has been <em>why</em>. This section is <em>where</em> — which file
+holds which decision, what each layer guarantees, and which three or four lines are load-bearing
+enough that changing them would invalidate a result. The brief asks for core functions and code in
+the Solution section, so this doubles as the source for that half of the write-up: the excerpts
+below are the real ones, copied out of the repository, not illustrative pseudocode.</p>
+
+<h3>15.1 Why a package and not a notebook</h3>
+
+<p>Phase 1 was a notebook, and that was the right shape for it: 49 cells of exploration read
+top-to-bottom as an argument. Phase 2 is fourteen experiments totalling a couple of hours of compute,
+and a notebook is the wrong container for that for four independent reasons.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Problem with one notebook</th><th>Consequence</th><th>What the package does instead</th></tr></thead>
+<tbody>
+<tr><td>A single <code>.ipynb</code> is one JSON file with one linear cell list</td>
+  <td>Two people — or two agents — editing different experiments produce a merge conflict in a
+  machine-generated file that is painful to resolve by hand</td>
+  <td>One module per concern, one script per experiment. Conflicts localise.</td></tr>
+<tr><td>A kernel holds state in memory</td>
+  <td>A crash at experiment 11 loses the first ten. "Restart and run all" costs the full 2–4 hours.</td>
+  <td>Each script is standalone and idempotent; results persist to <code>results/</code> as JSON the
+  moment they exist.</td></tr>
+<tr><td>Expensive intermediates live in variables</td>
+  <td>Fourteen experiments refit the same tuned model fourteen times</td>
+  <td><code>artifacts/</code> caches splits, best parameters, the fitted booster and the
+  out-of-fold probability vectors. Each is written once.</td></tr>
+<tr><td>A notebook's appendix listing is cell-order spaghetti</td>
+  <td>The marker reads 3,000 lines of interleaved narrative and code with no structure</td>
+  <td>The appendix lists twelve named modules with docstrings. It reads like software.</td></tr>
+</tbody></table></div>
+
+<p>The notebook did not disappear — <code>phase2_xgboost.ipynb</code> still exists and still carries
+the narrative. It just does no heavy work. It reads <code>results/</code> and renders, and it executes
+in well under a minute from a cold kernel. That inversion is the whole architectural idea: <strong>the
+notebook became a report generator and the package became the experiment.</strong></p>
+
+<h3>15.2 The layers, and the two rules that hold them together</h3>
+
+<p>Nine modules in <code>src/</code>, fourteen scripts plus three utilities in
+<code>experiments/</code>, and a strict direction of dependency: scripts import the package, the
+package never imports a script.</p>
+
+<div class="flow">
+  <div class="step"><div class="i">1</div><div class="t"><strong><code>config.py</code></strong> —
+  constants only. No imports from the rest of the package, so nothing can create a circular
+  dependency and every other module can read it freely.</div></div>
+  <div class="step"><div class="i">2</div><div class="t"><strong><code>data.py</code></strong> —
+  loading, cleaning, engineering, splitting. Owns the train/test boundary.</div></div>
+  <div class="step"><div class="i">3</div><div class="t"><strong><code>models.py</code></strong> —
+  every estimator in the project is constructed here and nowhere else.</div></div>
+  <div class="step"><div class="i">4</div><div class="t"><strong><code>runner.py</code></strong> —
+  the one cross-validation loop, plus the result-file writer.</div></div>
+  <div class="step"><div class="i">5</div><div class="t"><strong><code>costs.py</code></strong>,
+  <strong><code>metrics.py</code></strong>, <strong><code>tuning.py</code></strong> — decisions,
+  evidence, and search respectively.</div></div>
+  <div class="step"><div class="i">6</div><div class="t"><strong><code>experiments/exp01…exp14</code></strong>
+  — thin. Each one assembles components and writes JSON. Almost no logic of its own.</div></div>
+  <div class="step"><div class="i">7</div><div class="t"><strong><code>report.py</code></strong>,
+  <strong><code>figures.py</code></strong>, <strong><code>aggregate.py</code></strong>,
+  <strong><code>verify.py</code></strong> — read <code>results/</code> back out. These never fit a
+  model.</div></div>
+</div>
+
+<div class="box key">
+  <div class="bt">Rule 1 — there is exactly one evaluation path</div>
+  <p>Every experiment that reports a cross-validated number calls
+  <code>runner.cv_evaluate()</code>. None implements its own loop. This is not a style preference.
+  Divergent CV loops are the single largest source of numbers that cannot be reconciled later: one
+  loop shuffles, another does not; one computes the mean of per-fold AUCs, another pools
+  predictions and computes one AUC; one carves an early-stopping slice, another leaks the
+  validation fold into it. All four produce plausible-looking ROC-AUCs that differ in the third
+  decimal, and six weeks later nobody can say which table used which. One function means the
+  comparison across all fourteen experiments is <em>definitionally</em> like-for-like.</p>
+  <p style="margin-bottom:0"><strong>Rule 2 — no number is ever retyped.</strong> Experiments write
+  JSON; <code>report.py</code> and <code>figures.py</code> read it back. The report quotes
+  <code>results/manifest.csv</code>. This very guide is built the same way — see §15.12. A number
+  that appears in prose but not in a committed result file is, by construction, impossible.</p>
+</div>
+
+<h3>15.3 <code>config.py</code> — one place to change anything</h3>
+
+<p>Roughly sixty lines, no logic, and deliberately the first thing to read. If you want to know what
+the project assumes, it is all here.</p>
+
+<div class="codehdr"><span class="fn">src/config.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="n">SEED</span> = <span class="n">42</span>
+<span class="c"># Distinct from SEED so the repeated-CV folds used for variance reporting are not</span>
+<span class="c"># correlated with the folds the tuner selected against.</span>
+<span class="n">CV_SEED</span> = <span class="n">7</span>
+
+<span class="n">N_FOLDS</span> = <span class="n">5</span>
+<span class="n">N_REPEATS</span> = <span class="n">5</span>
+<span class="n">TEST_SIZE</span> = <span class="n">0.20</span>
+<span class="c"># Fraction carved out of each training fold as an early-stopping eval_set, so the</span>
+<span class="c"># CV validation fold is never seen by early stopping.</span>
+<span class="n">ES_SLICE</span> = <span class="n">0.15</span>
+<span class="n">ES_ROUNDS</span> = <span class="n">50</span>
+
+<span class="c"># FN (missed default) = LGD x EAD. Retail unsecured loss-given-default ~0.70.</span>
+<span class="n">LGD</span> = <span class="n">0.70</span>
+<span class="c"># FP (rejected good customer) = forgone net interest margin ~0.12 x exposure.</span>
+<span class="n">NIM</span> = <span class="n">0.12</span>
+<span class="c"># Headline cost ratio C_FN / C_FP = 0.70 / 0.12 = 5.83 -&gt; reported as 6:1.</span>
+<span class="n">R_HEADLINE</span> = <span class="n">6</span>
+<span class="n">R_GRID</span> = [<span class="n">1</span>, <span class="n">2</span>, <span class="n">5</span>, <span class="n">6</span>, <span class="n">10</span>, <span class="n">20</span>]
+</code></pre>
+
+<p>Two things in that excerpt are worth defending out loud, because a marker may read them as
+arbitrary.</p>
+
+<div class="box why">
+  <div class="bt">Why <code>CV_SEED = 7</code> rather than reusing 42</div>
+  <p style="margin-bottom:0">The tuner optimised against the five folds generated with
+  <code>random_state=SEED</code>. If the variance-reporting folds were generated from the same seed,
+  the first repeat of the repeated-CV would be <em>identical</em> to the folds Optuna selected
+  against — and the reported mean ± SD would be partly a measurement of how well the tuner
+  overfitted its own folds rather than of genuine fold-to-fold variance. Using a distinct integer
+  decorrelates them. It costs nothing and it removes a question the reader would otherwise be right
+  to ask. (§5.3 has the full argument; this is where it is actually implemented, in one integer.)</p>
+</div>
+
+<div class="box trap">
+  <div class="bt">The library incompatibility that forced a pinned flag</div>
+  <p>This one is real, current, and cost debugging time, so it is worth stating precisely.</p>
+<div class="codehdr"><span class="fn">src/config.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="c"># enable_categorical defaults to True in xgboost 3.4, and shap 0.52 reads that flag</span>
+<span class="c"># alone to decide a model has categorical splits -- which blocks interventional</span>
+<span class="c"># TreeSHAP. Numeric models must set it False explicitly. See SETUP.md.</span>
+<span class="n">XGB_FIXED</span> = {
+    <span class="s">"tree_method"</span>: <span class="s">"hist"</span>,
+    <span class="s">"enable_categorical"</span>: <span class="k">False</span>,
+    <span class="s">"eval_metric"</span>: <span class="s">"auc"</span>,
+    <span class="s">"n_jobs"</span>: -<span class="n">1</span>,
+    <span class="s">"random_state"</span>: <span class="n">SEED</span>,
+}
+</code></pre>
+  <p style="margin-bottom:0">Read the chain carefully. <code>xgboost</code>
+  <span data-v="v-xgboost"></span> flipped <code>enable_categorical</code> to default
+  <code>True</code>. That is harmless on its own — with no <code>category</code>-dtype columns the
+  flag changes nothing about the fit. But <code>shap</code> <span data-v="v-shap"></span> inspects
+  that constructor flag, not the actual dtypes, to decide whether the booster might contain
+  categorical splits; if the flag is set it refuses to run <code>interventional</code> TreeSHAP,
+  because the interventional algorithm would have to resample a categorical level it cannot reason
+  about. So a <em>numeric</em> model, trained on integer columns, silently loses access to the
+  explainer configuration §11.4 argues for — not because of anything about the model, but because of
+  a default in one library read by a guard in another. Pinning the flag <code>False</code> in
+  <code>XGB_FIXED</code> fixes it for every estimator in the project at once, which is the payoff of
+  constructing all of them in one place. The one arm that genuinely wants categorical handling —
+  the <code>enable_categorical</code> row of the encoding ablation (§10.1) — passes it explicitly as
+  an argument, and that arm does not need SHAP.</p>
+</div>
+
+<h4>The search space is declarative, so it can be printed</h4>
+
+<div class="codehdr"><span class="fn">src/config.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="c"># Declarative so tuning.py can suggest from it and the report can print it.</span>
+<span class="c"># (kind, low, high, log)</span>
+<span class="n">SEARCH_SPACE</span> = {
+    <span class="s">"max_depth"</span>:        (<span class="s">"int"</span>,   <span class="n">3</span>,     <span class="n">8</span>,     <span class="k">False</span>),
+    <span class="s">"eta"</span>:              (<span class="s">"float"</span>, <span class="n">0.01</span>,  <span class="n">0.30</span>,  <span class="k">True</span>),
+    <span class="s">"min_child_weight"</span>: (<span class="s">"float"</span>, <span class="n">1.0</span>,   <span class="n">20.0</span>,  <span class="k">True</span>),
+    <span class="s">"subsample"</span>:        (<span class="s">"float"</span>, <span class="n">0.60</span>,  <span class="n">1.0</span>,   <span class="k">False</span>),
+    <span class="s">"colsample_bytree"</span>: (<span class="s">"float"</span>, <span class="n">0.50</span>,  <span class="n">1.0</span>,   <span class="k">False</span>),
+    <span class="s">"gamma"</span>:            (<span class="s">"float"</span>, <span class="n">0.0</span>,   <span class="n">5.0</span>,   <span class="k">False</span>),
+    <span class="s">"reg_lambda"</span>:       (<span class="s">"float"</span>, <span class="n">1e-2</span>,  <span class="n">100.0</span>, <span class="k">True</span>),
+    <span class="s">"reg_alpha"</span>:        (<span class="s">"float"</span>, <span class="n">1e-3</span>,  <span class="n">10.0</span>,  <span class="k">True</span>),
+}
+</code></pre>
+
+<p>The alternative — writing <code>trial.suggest_float("eta", 0.01, 0.3, log=True)</code> inline in
+the objective — works perfectly well and is what most tutorials do. It has one defect: the search
+space then exists only as executable code, so the appendix table of "hyperparameter, searched range,
+selected value" has to be typed by hand, which violates Rule 2. Here
+<code>report.table_hyperparams()</code> iterates <code>SEARCH_SPACE</code> and joins it against the
+selected parameters from <code>results/exp02_tuning.json</code>. The range column in the appendix
+is the range the tuner actually used, provably, because there is only one copy of it.</p>
+
+<div class="box mark">
+  <div class="bt">The documented deviation</div>
+  <p style="margin-bottom:0">The plan budgeted 60–80 Optuna trials against an estimated 20–40
+  minutes. The comment in <code>config.py</code> records what happened instead:</p>
+<pre><code><span class="c"># The plan budgeted 60-80 trials against an estimated 20-40 min. Measured cost is ~2.3 s</span>
+<span class="c"># per trial, so the budget was raised: more TPE trials is strictly better and 150 still</span>
+<span class="c"># finishes in ~6 min. Recorded in the exp02 notes as a deviation.</span>
+<span class="n">N_TRIALS</span> = <span class="n">150</span>
+</code></pre>
+  <p style="margin-bottom:0">Note the second clause: <em>recorded in the exp02 notes as a
+  deviation</em>. The <code>notes</code> field of the result file is mandatory precisely so that
+  departures from the plan land in the committed artefact rather than being quietly absorbed. The
+  deviation is defensible — <span data-v="tune-trials"></span> trials in
+  <span data-v="tune-runtime"></span> is strictly more search for less than the planned budget — but
+  "defensible" and "undisclosed" are different things, and only one of them survives a viva.</p>
+</div>
+
+<h3>15.4 <code>data.py</code> — where the leakage firewall lives</h3>
+
+<p>This is the most consequential module in the project, because every protection described in §5 is
+ultimately one of its functions. It has four jobs in sequence.</p>
+
+<h4>(a) Load and clean, with the Phase 1 assertions carried across intact</h4>
+
+<div class="codehdr"><span class="fn">src/data.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">clean</span>(raw):
+    <span class="s">"""Phase 1 Cell 24: de-duplicate on features, fold undocumented codes into 'others'.
+
+    De-duplication happens before any split, so identical feature-rows cannot straddle
+    train and test and inflate every score.
+    """</span>
+    feat_cols = [c <span class="k">for</span> c <span class="k">in</span> raw.columns <span class="k">if</span> c != <span class="n">TARGET</span>]
+    df = raw.<span class="f">copy</span>()
+    df = df.<span class="f">drop_duplicates</span>(subset=feat_cols, keep=<span class="s">"first"</span>).<span class="f">reset_index</span>(drop=<span class="k">True</span>)
+    df[<span class="s">"EDUCATION"</span>] = df[<span class="s">"EDUCATION"</span>].<span class="f">replace</span>({<span class="n">0</span>: <span class="n">4</span>, <span class="n">5</span>: <span class="n">4</span>, <span class="n">6</span>: <span class="n">4</span>})
+    df[<span class="s">"MARRIAGE"</span>] = df[<span class="s">"MARRIAGE"</span>].<span class="f">replace</span>({<span class="n">0</span>: <span class="n">3</span>})
+
+    <span class="k">assert</span> <span class="f">len</span>(df) == <span class="n">29944</span>, <span class="s">f"Expected 29,944 rows after de-duplication, got {len(df):,}"</span>
+    <span class="k">assert</span> <span class="f">int</span>(df[<span class="n">TARGET</span>].<span class="f">sum</span>()) == <span class="n">6622</span>, <span class="s">"Unexpected default count after cleaning"</span>
+    <span class="k">assert</span> <span class="f">set</span>(df[<span class="s">"EDUCATION"</span>].<span class="f">unique</span>()) &lt;= {<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>}, <span class="s">"EDUCATION outside documented domain"</span>
+    <span class="k">assert</span> <span class="f">set</span>(df[<span class="s">"MARRIAGE"</span>].<span class="f">unique</span>()) &lt;= {<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>}, <span class="s">"MARRIAGE outside documented domain"</span>
+    <span class="k">assert</span> <span class="f">int</span>(df.<span class="f">isna</span>().<span class="f">sum</span>().<span class="f">sum</span>()) == <span class="n">0</span>, <span class="s">"Nulls introduced by cleaning"</span>
+    <span class="k">assert</span> <span class="k">not</span> df[feat_cols].<span class="f">duplicated</span>().<span class="f">any</span>(), <span class="s">"Duplicates survived cleaning"</span>
+    <span class="k">return</span> df
+</code></pre>
+
+<p>Six assertions, ported verbatim from Phase 1, and the reason they are assertions rather than
+printed summaries is that they are <em>claims the report makes</em>. The report says Phase 2 operates
+on the same <span data-v="n-clean"></span>-row frame the proposal described. That sentence is either
+true or the module refuses to import. There is no third state in which the number drifted and nobody
+noticed.</p>
+
+<p>Note also the ordering, which §5.1 argues for and this function enforces:
+<code>drop_duplicates</code> runs before anything else and before any split exists. Twenty-four
+identical feature rows split across train and test would let a model score them correctly by memory
+and inflate every metric in the project. De-duplicating <em>first</em> makes that structurally
+impossible rather than merely unlikely.</p>
+
+<h4>(b) Engineer, with an explicit missing-value convention</h4>
+
+<p>§10.2 benchmarks the derived features; here is how they are built, and the one subtlety is the
+divide-by-zero guard.</p>
+
+<div class="codehdr"><span class="fn">src/data.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="c"># Evenly spaced chronological month index; the OLS slope denominator is therefore</span>
+<span class="c"># a constant and the whole trend reduces to one dot product.</span>
+_X_MONTH = np.<span class="f">arange</span>(<span class="n">6</span>, dtype=<span class="f">float</span>)
+_X_CENTRED = _X_MONTH - _X_MONTH.<span class="f">mean</span>()
+_X_SS = <span class="f">float</span>((_X_CENTRED**<span class="n">2</span>).<span class="f">sum</span>())  <span class="c"># 17.5</span>
+
+<span class="k">def</span> <span class="f">_ols_slope</span>(values):
+    <span class="s">"""Least-squares slope of each row against the chronological month index."""</span>
+    v = np.<span class="f">asarray</span>(values, dtype=<span class="f">float</span>)
+    <span class="k">return</span> (v - v.<span class="f">mean</span>(axis=<span class="n">1</span>, keepdims=<span class="k">True</span>)) @ _X_CENTRED / _X_SS
+
+<span class="c"># ... inside engineer():</span>
+<span class="c"># Index-aligned with the bill of the same month, matching the column naming.</span>
+safe_bills = np.<span class="f">where</span>(bills &gt; <span class="n">0</span>, bills, np.<span class="n">nan</span>)
+ratios = pays / safe_bills
+
+<span class="k">assert</span> <span class="k">not</span> np.<span class="f">isinf</span>(out[added].<span class="f">to_numpy</span>(dtype=<span class="f">float</span>)).<span class="f">any</span>(), <span class="s">"engineer() emitted inf"</span>
+</code></pre>
+
+<div class="box why">
+  <div class="bt">Why <code>NaN</code> and not a sentinel like <code>-999</code> or <code>0</code></div>
+  <p style="margin-bottom:0">1,930 rows carry a negative <code>BILL_AMT</code> (Phase 1 §1.6) and
+  many more carry exactly zero, so <code>PAY_AMT / BILL_AMT</code> is genuinely undefined for a
+  substantial minority of clients — it is not a data error to be patched. Three options: fill with
+  zero, fill with a sentinel, or emit <code>NaN</code>. Filling with zero <em>lies</em>: it asserts
+  the client repaid nothing when in fact there was nothing to repay, and it places them next to
+  genuine non-payers in the ordering. A sentinel like <code>-999</code> is honest but forces the tree
+  to spend a split separating the sentinel from the real values, and that split consumes depth. The
+  <code>NaN</code> route is strictly better <em>for this learner</em>: XGBoost's sparsity-aware split
+  finding (§3.6) learns a default direction for missing values at every node, at no cost in depth,
+  choosing whichever side reduces loss more. So the undefined-ness is carried as information rather
+  than destroyed. The <code>isinf</code> assertion then guarantees the guard actually worked — a
+  division that slipped through as <code>inf</code> would propagate silently into the histogram
+  builder.</p>
+</div>
+
+<p>The slope trick is a small thing worth noticing. Because the six months are evenly spaced, the
+denominator <code>Σ(x−x̄)²</code> is the constant 17.5 for every client, so the per-client OLS slope
+collapses to a single matrix–vector product rather than 29,944 calls to a regression routine. It is
+the difference between a few milliseconds and a few seconds, and more importantly it is one line that
+is obviously correct.</p>
+
+<h4>(c) Split once, cache, and never reshuffle</h4>
+
+<div class="codehdr"><span class="fn">src/data.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">make_splits</span>(df=<span class="k">None</span>, force=<span class="k">False</span>):
+    <span class="s">"""Build and cache the 80/20 hold-out plus both fold structures.
+
+    Written once by WP4 and read by every experiment, so all fourteen share identical
+    indices and no experiment can silently reshuffle.
+    """</span>
+    <span class="k">if</span> <span class="n">SPLITS_PATH</span>.<span class="f">exists</span>() <span class="k">and</span> <span class="k">not</span> force:
+        <span class="k">return</span> <span class="f">load_splits</span>()
+    ...
+    <span class="c"># Tuning / model-selection folds.</span>
+    skf = <span class="f">StratifiedKFold</span>(n_splits=<span class="n">N_FOLDS</span>, shuffle=<span class="k">True</span>, random_state=<span class="n">SEED</span>)
+
+    <span class="c"># Variance-reporting folds: distinct seed so repeats are not correlated with</span>
+    <span class="c"># the folds the tuner optimised against.</span>
+    rskf = <span class="f">RepeatedStratifiedKFold</span>(
+        n_splits=<span class="n">N_FOLDS</span>, n_repeats=<span class="n">N_REPEATS</span>, random_state=<span class="n">CV_SEED</span>
+    )
+</code></pre>
+
+<p>The output is <code>artifacts/splits.npz</code> holding four integer arrays: <code>train_idx</code>
+(<span data-v="n-train"></span>), <code>test_idx</code> (<span data-v="n-test"></span>),
+<code>fold_id</code> for the five selection folds, and <code>rep_fold_id</code>, a 5×23,955 matrix
+for the twenty-five variance folds. Fold membership is stored as an <em>id per row</em> rather than as
+lists of indices, which is compact and makes the "does this partition the training rows exactly
+once?" check in <code>verify.py</code> trivial.</p>
+
+<p>Caching is not an optimisation here, it is a correctness mechanism. If each experiment called
+<code>train_test_split</code> itself, then a single accidental change — a different
+<code>random_state</code>, a forgotten <code>stratify=</code>, an experiment run before a cleaning fix
+and another after — would produce two different hold-out sets, and two experiments' numbers would no
+longer be comparable while looking entirely normal. One cached file eliminates the whole class of
+error.</p>
+
+<h4>(d) The firewall itself: two context functions, one of which cannot return test rows</h4>
+
+<p>This is the part that makes §5.7's leakage audit a one-line grep rather than a careful reading of
+2,000 lines.</p>
+
+<div class="codehdr"><span class="fn">src/data.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">training_context</span>(features=<span class="k">None</span>, engineered=<span class="k">False</span>, df=<span class="k">None</span>):
+    <span class="s">"""Training portion only, with both fold structures attached.
+
+    Experiments WP5-WP13 use this exclusively. It cannot return test rows, which is what
+    makes the leakage audit in section 7.5 a one-line grep: `X_test` should appear only
+    in the final-evaluation and SHAP modules.
+    """</span>
+    df = <span class="f">frame</span>(engineered) <span class="k">if</span> df <span class="k">is</span> <span class="k">None</span> <span class="k">else</span> df
+    s = <span class="f">load_splits</span>()
+    X, y = <span class="f">xy</span>(df, features)
+    tr = s[<span class="s">"train_idx"</span>]
+    <span class="k">return</span> {
+        <span class="s">"df"</span>: df, <span class="s">"splits"</span>: s,
+        <span class="s">"X"</span>: X.<span class="f">iloc</span>[tr].<span class="f">reset_index</span>(drop=<span class="k">True</span>),
+        <span class="s">"y"</span>: y[tr],
+        <span class="s">"folds"</span>: <span class="f">cv_folds</span>(s),
+        <span class="s">"repeated_folds"</span>: <span class="f">repeated_cv_folds</span>(s),
+        <span class="s">"features"</span>: <span class="f">list</span>(X.columns),
+    }
+
+<span class="k">def</span> <span class="f">test_context</span>(features=<span class="k">None</span>, engineered=<span class="k">False</span>, df=<span class="k">None</span>):
+    <span class="s">"""Held-out rows. Licensed for WP14/WP15 (SHAP explains decisions, selects nothing)
+    and WP18 (the single final-evaluation gate). Nothing else may import this."""</span>
+</code></pre>
+
+<div class="box key">
+  <div class="bt">Why this design beats "just be careful"</div>
+  <p style="margin-bottom:0">An experiment that calls <code>training_context()</code> has no
+  reference to a test row anywhere in its scope. Not a filtered-out one, not a commented-one — the
+  held-out rows simply do not exist in any variable the script can reach. Leaking therefore requires
+  <em>importing a different function</em>, which is a visible, greppable, single-token act. Compare
+  the alternative, where every script holds <code>X_train, X_test, y_train, y_test</code> and
+  correctness depends on nobody ever typing the wrong one of four nearly-identical names across
+  2,000 lines while tired. The firewall converts a discipline problem into a type-system-shaped
+  problem, and then <code>verify.py</code> checks it mechanically (§15.11). Note the honest framing in
+  the docstring too: SHAP is licensed on the hold-out because it <em>explains</em> held-out decisions
+  and selects nothing — an explanation cannot leak into a choice that was already frozen.</p>
+</div>
+
+<h3>15.5 <code>models.py</code> — every estimator, constructed once</h3>
+
+<p>Nothing in <code>experiments/</code> ever calls <code>XGBClassifier(...)</code>. All eleven
+estimator varieties — the seven ladder rungs, the three encoding arms, the SMOTE wrapper — are built
+by factory functions here, so a configuration cannot drift between two experiments that believe they
+are testing the same model.</p>
+
+<div class="codehdr"><span class="fn">src/models.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">xgb_classifier</span>(params=<span class="k">None</span>, spw=<span class="n">1.0</span>, early_stopping=<span class="k">True</span>,
+                   enable_categorical=<span class="k">False</span>, seed=<span class="n">SEED</span>):
+    <span class="s">"""XGBoost with the project's fixed infrastructure settings.
+
+    `early_stopping_rounds` and `eval_metric` go in the constructor, not `.fit()` --
+    the XGBoost 2.x/3.x API moved them. `enable_categorical` is pinned False because
+    xgboost 3.4 defaults it True and shap then refuses interventional TreeSHAP.
+    """</span>
+    p = <span class="f">dict</span>(<span class="n">XGB_FIXED</span>)
+    p[<span class="s">"enable_categorical"</span>] = enable_categorical
+    p[<span class="s">"random_state"</span>] = seed
+    p[<span class="s">"scale_pos_weight"</span>] = spw
+    <span class="k">if</span> early_stopping:
+        p[<span class="s">"n_estimators"</span>] = <span class="n">N_ESTIMATORS_CAP</span>
+        p[<span class="s">"early_stopping_rounds"</span>] = <span class="n">ES_ROUNDS</span>
+    <span class="k">if</span> params:
+        p.<span class="f">update</span>(params)
+    <span class="k">return</span> <span class="f">XGBClassifier</span>(**p)
+</code></pre>
+
+<div class="box trap">
+  <div class="bt">The API trap that silently does nothing</div>
+  <p style="margin-bottom:0">Almost every tutorial written before 2023 shows
+  <code>model.fit(X, y, early_stopping_rounds=50, eval_metric="auc")</code>. In the XGBoost 2.x and
+  3.x scikit-learn API those two arguments moved to the <strong>constructor</strong>. Passing them to
+  <code>.fit()</code> now raises a <code>TypeError</code> — which is the good outcome, because you
+  find out immediately. The dangerous variant is omitting them entirely and assuming the
+  <code>n_estimators=2000</code> cap is being trimmed by early stopping when it is not: you then
+  train two thousand trees on 24,000 rows, overfit substantially, and the only symptom is a
+  mysteriously large train/CV gap. Note also what the <code>early_stopping=True</code> branch does —
+  it sets <code>n_estimators</code> to the cap <em>only</em> when early stopping is active. Rung 5,
+  the library-defaults rung, deliberately gets neither, because its entire purpose is to measure
+  what you get with no tuning and no stopping at all.</p>
+</div>
+
+<h4>The ladder's interpretability-cost column is computed, not asserted</h4>
+
+<div class="codehdr"><span class="fn">src/models.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">count_tree_nodes</span>(fitted):
+    <span class="s">"""Interpretability cost for the tree rungs: nodes a human must read."""</span>
+    est = fitted.best_estimator_ <span class="k">if</span> <span class="f">isinstance</span>(fitted, <span class="n">GridSearchCV</span>) <span class="k">else</span> fitted
+    <span class="k">if</span> <span class="f">isinstance</span>(est, <span class="n">DecisionTreeClassifier</span>):
+        <span class="k">return</span> <span class="f">int</span>(est.tree_.node_count)
+    <span class="k">if</span> <span class="f">isinstance</span>(est, <span class="n">RandomForestClassifier</span>):
+        <span class="k">return</span> <span class="f">int</span>(<span class="f">sum</span>(t.tree_.node_count <span class="k">for</span> t <span class="k">in</span> est.estimators_))
+    <span class="k">if</span> <span class="f">isinstance</span>(est, <span class="n">XGBClassifier</span>):
+        <span class="k">return</span> <span class="f">int</span>(<span class="f">len</span>(est.<span class="f">get_booster</span>().<span class="f">get_dump</span>()))
+    <span class="k">return</span> <span class="k">None</span>
+</code></pre>
+
+<p>This is the function behind §6.2's claim that the accuracy/interpretability trade-off is a
+<em>measured</em> axis rather than an assertion — and it is also the source of the unit inconsistency
+§6.2 flags honestly: the sklearn branches return node counts while the XGBoost branch returns
+<code>len(get_dump())</code>, which is a <strong>tree</strong> count. Both are "things a human must
+read", but they are not the same unit, so the column must be read as an order of magnitude and not a
+ratio. Better to say that than to quietly present 692,674 and 499 as comparable.</p>
+
+<h4>The one custom estimator, and the one place it deliberately departs from the obvious design</h4>
+
+<div class="codehdr"><span class="fn">src/models.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">class</span> <span class="n">SmoteXGB</span>(<span class="n">BaseEstimator</span>, <span class="n">ClassifierMixin</span>):
+    <span class="s">"""SMOTE + XGBoost, resampling strictly inside `fit`.
+
+    Equivalent to an imblearn Pipeline for leakage purposes -- oversampling only ever
+    sees the rows passed to `fit`, which cv_evaluate restricts to the fold's training
+    half -- with one deliberate refinement: the early-stopping slice is carved off
+    *before* resampling, so it retains the natural 22% prevalence. Validating against
+    synthetically balanced data would make the stopping criterion measure the wrong
+    distribution.
+    """</span>
+    <span class="k">def</span> <span class="f">fit</span>(self, X, y):
+        y = np.<span class="f">asarray</span>(y).<span class="f">astype</span>(<span class="f">int</span>)
+        i_fit, i_es = <span class="f">train_test_split</span>(
+            np.<span class="f">arange</span>(<span class="f">len</span>(y)), test_size=<span class="n">ES_SLICE</span>, stratify=y, random_state=self.seed
+        )
+        X_res, y_res = <span class="f">SMOTE</span>(random_state=self.seed).<span class="f">fit_resample</span>(
+            X.<span class="f">iloc</span>[i_fit], y[i_fit]
+        )
+        self.model_ = <span class="f">xgb_classifier</span>(self.params, spw=<span class="n">1.0</span>, seed=self.seed)
+        self.model_.<span class="f">fit</span>(X_res, y_res,
+                        eval_set=[(X.<span class="f">iloc</span>[i_es], y[i_es])], verbose=<span class="k">False</span>)
+        self.classes_ = np.<span class="f">array</span>([<span class="n">0</span>, <span class="n">1</span>])
+        <span class="k">return</span> self
+</code></pre>
+
+<div class="box deriv">
+  <div class="bt">Why not simply <code>imblearn.Pipeline([("smote", SMOTE()), ("xgb", ...)])</code></div>
+  <p>The pipeline is the standard answer and it is correct on the question everyone worries about:
+  it resamples inside <code>fit</code> only, so synthetic minority rows never reach a validation
+  fold, and the notorious failure of SMOTE-before-split is avoided. §8.5 explains why that failure is
+  so severe — interpolating before splitting places synthetic points <em>between</em> a train row
+  and a test row, and the model can then almost memorise the test set.</p>
+  <p style="margin-bottom:0">But the pipeline gets one secondary thing wrong here. XGBoost needs an
+  early-stopping <code>eval_set</code>, and if that slice is taken from the pipeline's output it is
+  <strong>50/50 balanced synthetic data</strong>. Early stopping would then be minimising AUC against
+  a distribution that does not exist, and would stop at the wrong tree count — not catastrophically,
+  but wrongly, and in a way that would make arm D's comparison against A/B/C unfair. Carving
+  <code>i_es</code> out <em>first</em>, at the natural <span data-v="prevalence-pct"></span>
+  prevalence, and resampling only <code>i_fit</code>, fixes it. This is the kind of detail that
+  justifies writing twenty lines of custom estimator instead of using the one-liner: the one-liner
+  is leakage-safe but distribution-wrong, and only one of those two is obvious.</p>
+</div>
+
+<h3>15.6 <code>runner.py</code> — the single evaluation path</h3>
+
+<p>Rule 1 made concrete. Four functions matter.</p>
+
+<h4><code>fit_one</code> — where the early-stopping slice is carved</h4>
+
+<div class="codehdr"><span class="fn">src/runner.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">fit_one</span>(est, X_tr, y_tr, seed=<span class="n">SEED</span>):
+    <span class="s">"""Fit a single estimator, carving the early-stopping slice out of the training data.
+
+    The eval_set comes from an inner slice of this fold's *training* rows, so the outer
+    validation fold is never seen by early stopping and the test set never at all.
+    """</span>
+    <span class="k">if</span> <span class="f">_uses_early_stopping</span>(est):
+        i_fit, i_es = <span class="f">train_test_split</span>(
+            np.<span class="f">arange</span>(<span class="f">len</span>(y_tr)), test_size=<span class="n">ES_SLICE</span>, stratify=y_tr, random_state=seed
+        )
+        est.<span class="f">fit</span>(X_tr.<span class="f">iloc</span>[i_fit], y_tr[i_fit],
+                eval_set=[(X_tr.<span class="f">iloc</span>[i_es], y_tr[i_es])], verbose=<span class="k">False</span>)
+    <span class="k">else</span>:
+        est.<span class="f">fit</span>(X_tr, y_tr)
+    <span class="k">return</span> est
+</code></pre>
+
+<p>Nine lines, and they are the implementation of §5.4. The arguments are already restricted to one
+fold's training half by the caller; <code>fit_one</code> splits that half again, 85/15, and uses the
+15% purely to decide when to stop adding trees. Three distinct row sets are therefore in play per
+fold — fit rows, stopping rows, scoring rows — and each is used for exactly one purpose.</p>
+
+<p><code>_uses_early_stopping</code> is a two-line type check rather than a flag, which matters
+because the same function fits the dummy classifier, the logistic pipeline, the grid-searched tree,
+the random forest and the boosters. Non-XGBoost estimators take the <code>else</code> branch and get
+all the training rows, which is correct: handing a random forest an 85% subsample to match XGBoost
+would handicap it for no reason and corrupt the ladder comparison.</p>
+
+<h4><code>cv_evaluate</code> — mean, SD, and the out-of-fold vector in one pass</h4>
+
+<div class="codehdr"><span class="fn">src/runner.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">cv_evaluate</span>(X, y, factory, folds, seed=<span class="n">SEED</span>, collect_oof=<span class="k">True</span>, return_models=<span class="k">False</span>):
+    <span class="s">"""Fit `factory()` on every fold and report mean +/- SD across fits.
+
+    The SD returned is across fits, not the standard error -- it is the quantity the
+    report uses to decide whether two arms are distinguishable.
+    """</span>
+    <span class="k">for</span> k, (tr, va) <span class="k">in</span> <span class="f">enumerate</span>(folds):
+        est = <span class="f">fit_one</span>(<span class="f">factory</span>(), X.<span class="f">iloc</span>[tr], y[tr], seed=seed)
+        proba = est.<span class="f">predict_proba</span>(X.<span class="f">iloc</span>[va])[:, <span class="n">1</span>]
+        per_fold.<span class="f">append</span>(<span class="f">_fold_metrics</span>(y[va], proba))
+        <span class="k">if</span> collect_oof:
+            oof_sum[va] += proba
+            oof_n[va] += <span class="n">1</span>
+        ...
+    <span class="k">for</span> m <span class="k">in</span> (<span class="s">"roc_auc"</span>, <span class="s">"pr_auc"</span>, <span class="s">"brier"</span>):
+        vals = np.<span class="f">array</span>([f[m] <span class="k">for</span> f <span class="k">in</span> per_fold], dtype=<span class="f">float</span>)
+        summary[<span class="s">f"{m}_mean"</span>] = <span class="f">float</span>(vals.<span class="f">mean</span>())
+        summary[<span class="s">f"{m}_sd"</span>] = <span class="f">float</span>(vals.<span class="f">std</span>(ddof=<span class="n">1</span>)) <span class="k">if</span> <span class="f">len</span>(vals) &gt; <span class="n">1</span> <span class="k">else</span> <span class="n">0.0</span>
+</code></pre>
+
+<p>Four design points, each of which shows up somewhere in the results.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Detail</th><th>Why it is that way</th></tr></thead>
+<tbody>
+<tr><td><code>factory</code> is a callable, not an estimator</td>
+  <td>Calling <code>factory()</code> inside the loop builds a <em>fresh</em> estimator per fold.
+  Passing one instance and refitting it would be fine for sklearn but invites subtle state carry-over,
+  and makes it impossible for an arm to vary its construction per fold.</td></tr>
+<tr><td><code>ddof=1</code></td>
+  <td>The sample SD across fits. §5.6's "do not bold a difference under one fold-SD" rule needs the
+  spread of the fits, not the precision of their mean. Reporting the standard error instead — which is
+  SD/√25, five times smaller — would make almost every null result look significant. This single
+  keyword argument is the difference between an honest comparison and a misleading one.</td></tr>
+<tr><td><code>oof_sum</code> / <code>oof_n</code> accumulators</td>
+  <td>In 5-fold CV every row is in exactly one validation fold, so <code>oof_n</code> is all ones and
+  the division is a no-op. In repeated 5×5 CV every row appears five times, so the vector is the mean
+  of five out-of-fold predictions. Dividing by the count handles both without branching, and the
+  resulting vector is what the threshold is frozen from (§9.3).</td></tr>
+<tr><td>Metrics computed <em>per fold</em>, then averaged</td>
+  <td>Not pooled. Pooling all predictions and computing one AUC gives a slightly different number and,
+  critically, no SD at all. The per-fold route is what makes a variance claim possible.</td></tr>
+</tbody></table></div>
+
+<h4><code>make_row</code> and <code>save_result</code> — the contract, enforced</h4>
+
+<div class="codehdr"><span class="fn">src/runner.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">make_row</span>(label, cv_summary, params=<span class="k">None</span>, n_features=<span class="k">None</span>, test=<span class="k">None</span>, extra=<span class="k">None</span>):
+    <span class="s">"""Build one `rows[]` entry of the result contract.
+
+    Any metric that does not apply is explicitly null, never omitted and never zero.
+    """</span>
+    row = {
+        <span class="s">"label"</span>: label,
+        <span class="s">"params"</span>: params <span class="k">or</span> {},
+        <span class="s">"n_features"</span>: n_features,
+        <span class="s">"cv"</span>: {...} <span class="k">if</span> cv_summary <span class="k">is</span> <span class="k">not</span> <span class="k">None</span> <span class="k">else</span> <span class="k">None</span>,
+        <span class="s">"test"</span>: test,
+    }
+
+<span class="k">def</span> <span class="f">save_result</span>(experiment_id, title, rows, notes, runtime_sec, config=<span class="k">None</span>, seed=<span class="n">SEED</span>):
+    <span class="s">"""Write results/&lt;experiment_id&gt;.json against the section 3.2 contract."""</span>
+    <span class="k">if</span> <span class="k">not</span> notes <span class="k">or</span> <span class="k">not</span> <span class="f">str</span>(notes).<span class="f">strip</span>():
+        <span class="k">raise</span> <span class="f">ValueError</span>(<span class="s">"notes is mandatory; 'Nothing unusual' is acceptable, empty is not"</span>)
+</code></pre>
+
+<div class="box why">
+  <div class="bt">Three enforcement details</div>
+  <p><strong>Null, never zero.</strong> Rung 1b scores <code>PAY_0</code> as a raw ordinal rather than
+  fitting a model, so it has no accuracy at a 0.5 threshold. Writing <code>0.0</code> there would be a
+  <em>false claim</em> that it got nothing right, and it would plot as a bar at the origin.
+  <code>null</code> propagates through <code>report.num()</code> to a dash in the table and is simply
+  absent from the chart. The schema check in <code>verify.py</code> enforces the distinction.</p>
+  <p><strong><code>notes</code> is mandatory and the error message says what counts.</strong> Not an
+  empty string, not a default. Every anomaly described in §6 through §14 — the seed-10 early-stopping
+  outlier, the zero contradictory duplicate groups, the raised trial budget — is in a committed
+  <code>notes</code> field because the writer refuses to run without one. A field you may skip is a
+  field you will skip at 2am on the night an experiment finally works.</p>
+  <p style="margin-bottom:0"><strong><code>versions()</code> is captured per run.</strong> Every
+  result file records the Python, numpy, sklearn, xgboost, shap, optuna, imblearn and pandas versions
+  that produced it. That is what lets §15.12 state the environment without anybody reading it off a
+  terminal, and it is what would let a future reader tell whether a number changed because of a code
+  edit or a library upgrade.</p>
+</div>
+
+<h4><code>require_artifact</code> — fail loudly, never recompute</h4>
+
+<div class="codehdr"><span class="fn">src/runner.py</span><span class="tag">excerpt</span></div>
+<pre><code><span class="k">def</span> <span class="f">require_artifact</span>(path, wp):
+    <span class="s">"""Fail loudly rather than silently recomputing -- that is how seeds drift."""</span>
+    <span class="k">if</span> <span class="k">not</span> path.<span class="f">exists</span>():
+        sys.<span class="f">exit</span>(<span class="s">f"MISSING ARTIFACT: {path}\nProduced by {wp}. Run that first."</span>)
+    <span class="k">return</span> path
+</code></pre>
+
+<p>Nine experiments depend on <code>artifacts/best_params.json</code>. The tempting behaviour when it
+is missing is to re-tune — convenient, and catastrophic: the re-tune would run inside a different
+script with possibly different folds, and two experiments would then be reporting "the tuned model"
+while meaning two different models. Exiting with a message that <em>names the script to run</em>
+costs the user thirty seconds and preserves the invariant that there is one tuned configuration in
+the project.</p>
+
+<!-- Section 15 continues in 98b_code.html, which closes this <section>. -->

@@ -1,0 +1,188 @@
+{
+  "experiment_id": "exp03_imbalance",
+  "title": "Class-imbalance strategy comparison",
+  "run_utc": "2026-09-30T09:47:34Z",
+  "seed": 42,
+  "versions": {
+    "python": "3.14.3",
+    "numpy": "2.5.3",
+    "sklearn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.52.0",
+    "optuna": "5.0.0",
+    "imblearn": "0.14.2",
+    "pandas": "3.0.6"
+  },
+  "runtime_sec": 302.0,
+  "config": {
+    "scale_pos_weight": 3.5215175537938843,
+    "r": 6,
+    "thresholds": {
+      "A": 0.1340732,
+      "C": 0.3580284,
+      "D": 0.4720056
+    },
+    "n_trials_spw": 150,
+    "n_trials_smote": 60,
+    "arm_A_params_source": "exp02 (spw=1 study)"
+  },
+  "rows": [
+    {
+      "label": "A_baseline",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7845418198217665,
+        "roc_auc_sd": 0.00711929880687044,
+        "pr_auc_mean": 0.5602203741928651,
+        "pr_auc_sd": 0.014612254574967478,
+        "brier_mean": 0.1347932654619217,
+        "brier_sd": 0.004135158657298805,
+        "n_fits": 25
+      },
+      "test": null,
+      "oof_threshold": 0.5,
+      "oof_recall": 0.35730464326160816,
+      "oof_precision": 0.6775232641374374,
+      "oof_f1": 0.467869500741473,
+      "oof_cost_r6": 21331.0,
+      "spw": 1.0,
+      "sampler": null
+    },
+    {
+      "label": "B_threshold",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7845418198217665,
+        "roc_auc_sd": 0.00711929880687044,
+        "pr_auc_mean": 0.5602203741928651,
+        "pr_auc_sd": 0.014612254574967478,
+        "brier_mean": 0.1347932654619217,
+        "brier_sd": 0.004135158657298805,
+        "n_fits": 25
+      },
+      "test": null,
+      "oof_threshold": 0.1340732,
+      "oof_recall": 0.828803322008305,
+      "oof_precision": 0.33295420078859567,
+      "oof_f1": 0.47506220923942444,
+      "oof_cost_r6": 14239.0,
+      "spw": 1.0,
+      "sampler": null,
+      "note": "identical fitted model to A_baseline; only the decision threshold differs, so CV ranking and calibration metrics are the same by construction"
+    },
+    {
+      "label": "C_spw",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.011204389006721466,
+        "min_child_weight": 15.719632748673966,
+        "subsample": 0.8726680299732419,
+        "colsample_bytree": 0.795507846386498,
+        "gamma": 3.561706833053609,
+        "reg_lambda": 28.92053414512721,
+        "reg_alpha": 8.68059488934926
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7848490893422236,
+        "roc_auc_sd": 0.007398827796930321,
+        "pr_auc_mean": 0.5581029869831131,
+        "pr_auc_sd": 0.01539503159939408,
+        "brier_mean": 0.18008804857730865,
+        "brier_sd": 0.005689537395735027,
+        "n_fits": 25
+      },
+      "test": null,
+      "oof_threshold": 0.5,
+      "oof_recall": 0.6342015855039638,
+      "oof_precision": 0.46907720228954347,
+      "oof_f1": 0.5392825615921675,
+      "oof_cost_r6": 15431.0,
+      "spw": 3.5215175537938843,
+      "sampler": null
+    },
+    {
+      "label": "C_spw_threshold",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.011204389006721466,
+        "min_child_weight": 15.719632748673966,
+        "subsample": 0.8726680299732419,
+        "colsample_bytree": 0.795507846386498,
+        "gamma": 3.561706833053609,
+        "reg_lambda": 28.92053414512721,
+        "reg_alpha": 8.68059488934926
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7848490893422236,
+        "roc_auc_sd": 0.007398827796930321,
+        "pr_auc_mean": 0.5581029869831131,
+        "pr_auc_sd": 0.01539503159939408,
+        "brier_mean": 0.18008804857730865,
+        "brier_sd": 0.005689537395735027,
+        "n_fits": 25
+      },
+      "test": null,
+      "oof_threshold": 0.3580284,
+      "oof_recall": 0.8189882974707436,
+      "oof_precision": 0.338984375,
+      "oof_f1": 0.4795004972925186,
+      "oof_cost_r6": 14215.0,
+      "spw": 3.5215175537938843,
+      "sampler": null
+    },
+    {
+      "label": "D_smote",
+      "params": {
+        "max_depth": 8,
+        "eta": 0.01879877971501737,
+        "min_child_weight": 6.916428379958588,
+        "subsample": 0.818894612611888,
+        "colsample_bytree": 0.5148625046909794,
+        "gamma": 3.803816514356164,
+        "reg_lambda": 32.76329114355622,
+        "reg_alpha": 0.012328081728227289
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7681102191733854,
+        "roc_auc_sd": 0.008786749612229023,
+        "pr_auc_mean": 0.5217563056972573,
+        "pr_auc_sd": 0.01713317407209646,
+        "brier_mean": 0.22004346132278443,
+        "brier_sd": 0.01565300690522079,
+        "n_fits": 25
+      },
+      "test": null,
+      "oof_threshold": 0.4720056,
+      "oof_recall": 0.8110607776519442,
+      "oof_precision": 0.3244733066525712,
+      "oof_f1": 0.4635132948600399,
+      "oof_cost_r6": 14952.0,
+      "spw": 1.0,
+      "sampler": "SMOTE"
+    }
+  ],
+  "notes": "Reweighting changes ranking by +0.00031 ROC-AUC against a fold-SD of 0.00712, so A and C are not distinguishable on ranking. Calibration does move: Brier 0.13479 (spw=1) versus 0.18009 (spw=3.52), a +0.04529 change. This is a mechanistic result, not a null one: reweighting and threshold-moving are two parameterisations of the same decision shift, but only threshold-moving preserves probability semantics, and the cost analysis in WP14 consumes probabilities. SMOTE reaches 0.76811 (-0.01643 versus A) and is rejected on dataset-specific grounds rather than generic ones: interpolating two clients produces values such as PAY_0 = 0.37, a repayment code that does not exist, and Phase 1 established PAY_n is non-monotonic and categorical-like. max_delta_step was considered and dismissed -- it addresses imbalance beyond roughly 100:1, and this dataset is 3.5:1. Thresholds were frozen from out-of-fold training predictions at r=6; the test set is not touched by this experiment."
+}

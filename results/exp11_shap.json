@@ -1,0 +1,391 @@
+{
+  "experiment_id": "exp11_shap",
+  "title": "TreeSHAP attribution on held-out decisions",
+  "run_utc": "2026-09-30T09:35:29Z",
+  "seed": 42,
+  "versions": {
+    "python": "3.14.3",
+    "numpy": "2.5.3",
+    "sklearn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.52.0",
+    "optuna": "5.0.0",
+    "imblearn": "0.14.2",
+    "pandas": "3.0.6"
+  },
+  "runtime_sec": 26.8,
+  "config": {
+    "background_n": 1000,
+    "explain_n": 2000,
+    "feature_perturbation": "interventional",
+    "space": "log-odds (margin)",
+    "additivity_max_error": 3.6852818472432602e-06,
+    "path_dependent_rank_rho": 0.9733201581027668,
+    "pay0_profile": {
+      "-2": {
+        "n": 191,
+        "mean_shap_logodds": -0.21352956115092434,
+        "observed_default_rate": 0.1256544502617801
+      },
+      "-1": {
+        "n": 398,
+        "mean_shap_logodds": -0.1645431164165461,
+        "observed_default_rate": 0.1658291457286432
+      },
+      "0": {
+        "n": 965,
+        "mean_shap_logodds": -0.28782377571301876,
+        "observed_default_rate": 0.13678756476683937
+      },
+      "1": {
+        "n": 235,
+        "mean_shap_logodds": 0.2504767634568095,
+        "observed_default_rate": 0.3276595744680851
+      },
+      "2": {
+        "n": 181,
+        "mean_shap_logodds": 1.5169308753136357,
+        "observed_default_rate": 0.6740331491712708
+      },
+      "3": {
+        "n": 22,
+        "mean_shap_logodds": 1.3654029738646285,
+        "observed_default_rate": 0.7727272727272727
+      },
+      "4": {
+        "n": 6,
+        "mean_shap_logodds": 1.1668614346783839,
+        "observed_default_rate": 0.5
+      },
+      "5": {
+        "n": 1,
+        "mean_shap_logodds": 0.7606262371713092,
+        "observed_default_rate": 1.0
+      },
+      "8": {
+        "n": 1,
+        "mean_shap_logodds": 0.692629132420625,
+        "observed_default_rate": 0.0
+      }
+    },
+    "pay0_shap_vs_rate_rho": 0.7,
+    "waterfall_cases": {
+      "true_positive": {
+        "row": 521,
+        "proba": 0.8557156324386597,
+        "y": 1
+      },
+      "false_negative": {
+        "row": 386,
+        "proba": 0.035340648144483566,
+        "y": 1
+      }
+    },
+    "group_share": {
+      "pay_status": 0.4021395456778801,
+      "bill": 0.16480828276820636
+    }
+  },
+  "rows": [
+    {
+      "label": "PAY_0",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 1,
+      "mean_abs_shap": 0.3779710336617385,
+      "mean_shap": -0.006051216414936323,
+      "mean_abs_shap_path_dependent": 0.49195894598960876,
+      "share_of_total": 0.22290713507955748,
+      "group": "pay_status"
+    },
+    {
+      "label": "LIMIT_BAL",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 2,
+      "mean_abs_shap": 0.2077997144806081,
+      "mean_shap": -0.028682572789284613,
+      "mean_abs_shap_path_dependent": 0.1779763251543045,
+      "share_of_total": 0.12254917678870614,
+      "group": "other"
+    },
+    {
+      "label": "BILL_AMT1",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 3,
+      "mean_abs_shap": 0.12539911041941607,
+      "mean_shap": 0.015438277222927423,
+      "mean_abs_shap_path_dependent": 0.11332837492227554,
+      "share_of_total": 0.07395370003441272,
+      "group": "bill"
+    },
+    {
+      "label": "PAY_AMT2",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 4,
+      "mean_abs_shap": 0.10872892462728119,
+      "mean_shap": 0.013579173439821192,
+      "mean_abs_shap_path_dependent": 0.10293357074260712,
+      "share_of_total": 0.0641225145063327,
+      "group": "other"
+    },
+    {
+      "label": "PAY_AMT1",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 5,
+      "mean_abs_shap": 0.09662209237081018,
+      "mean_shap": -0.013990737288406534,
+      "mean_abs_shap_path_dependent": 0.09398168325424194,
+      "share_of_total": 0.05698255124768283,
+      "group": "other"
+    },
+    {
+      "label": "PAY_2",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 6,
+      "mean_abs_shap": 0.09068559150099634,
+      "mean_shap": 0.010454925590739132,
+      "mean_abs_shap_path_dependent": 0.10719075053930283,
+      "share_of_total": 0.053481519995452614,
+      "group": "pay_status"
+    },
+    {
+      "label": "PAY_3",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 7,
+      "mean_abs_shap": 0.08372056255699004,
+      "mean_shap": 0.005930052683336279,
+      "mean_abs_shap_path_dependent": 0.08298162370920181,
+      "share_of_total": 0.04937391780008416,
+      "group": "pay_status"
+    },
+    {
+      "label": "PAY_AMT3",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 8,
+      "mean_abs_shap": 0.08159097771718336,
+      "mean_shap": -0.018108430915255425,
+      "mean_abs_shap_path_dependent": 0.07327811419963837,
+      "share_of_total": 0.048118002364048416,
+      "group": "other"
+    },
+    {
+      "label": "PAY_4",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 9,
+      "mean_abs_shap": 0.06093995386014178,
+      "mean_shap": -0.001853221837069607,
+      "mean_abs_shap_path_dependent": 0.061187904328107834,
+      "share_of_total": 0.03593913108961003,
+      "group": "pay_status"
+    },
+    {
+      "label": "PAY_AMT6",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 10,
+      "mean_abs_shap": 0.05237911236387954,
+      "mean_shap": 0.001388736558628554,
+      "mean_abs_shap_path_dependent": 0.05560207739472389,
+      "share_of_total": 0.03089040385431136,
+      "group": "other"
+    },
+    {
+      "label": "BILL_AMT2",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 11,
+      "mean_abs_shap": 0.04800129629425256,
+      "mean_shap": 0.010386202203769433,
+      "mean_abs_shap_path_dependent": 0.045167505741119385,
+      "share_of_total": 0.028308601676160526,
+      "group": "bill"
+    },
+    {
+      "label": "MARRIAGE",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 12,
+      "mean_abs_shap": 0.043140148772713494,
+      "mean_shap": 0.005319805264994525,
+      "mean_abs_shap_path_dependent": 0.0406656339764595,
+      "share_of_total": 0.02544175641363412,
+      "group": "other"
+    },
+    {
+      "label": "PAY_AMT4",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 13,
+      "mean_abs_shap": 0.038729074565796745,
+      "mean_shap": -0.006839239425416876,
+      "mean_abs_shap_path_dependent": 0.03532137721776962,
+      "share_of_total": 0.02284034036182338,
+      "group": "other"
+    },
+    {
+      "label": "PAY_5",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 14,
+      "mean_abs_shap": 0.03461631272421702,
+      "mean_shap": 0.010983393229738443,
+      "mean_abs_shap_path_dependent": 0.048328205943107605,
+      "share_of_total": 0.020414853015638248,
+      "group": "pay_status"
+    },
+    {
+      "label": "BILL_AMT6",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 15,
+      "mean_abs_shap": 0.03460519301747497,
+      "mean_shap": 0.006105681203619407,
+      "mean_abs_shap_path_dependent": 0.03098948858678341,
+      "share_of_total": 0.020408295206303544,
+      "group": "bill"
+    },
+    {
+      "label": "PAY_6",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 16,
+      "mean_abs_shap": 0.03395185054217506,
+      "mean_shap": 0.008920596471788859,
+      "mean_abs_shap_path_dependent": 0.0463147833943367,
+      "share_of_total": 0.02002298869753752,
+      "group": "pay_status"
+    },
+    {
+      "label": "SEX",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 17,
+      "mean_abs_shap": 0.03291932071209371,
+      "mean_shap": 0.0036432068710821994,
+      "mean_abs_shap_path_dependent": 0.034770380705595016,
+      "share_of_total": 0.01941405773243718,
+      "group": "other"
+    },
+    {
+      "label": "AGE",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 18,
+      "mean_abs_shap": 0.03278035716523591,
+      "mean_shap": -0.0010267989265597681,
+      "mean_abs_shap_path_dependent": 0.03350694477558136,
+      "share_of_total": 0.01933210445202181,
+      "group": "other"
+    },
+    {
+      "label": "PAY_AMT5",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 19,
+      "mean_abs_shap": 0.028926580918094986,
+      "mean_shap": -0.005658422278820881,
+      "mean_abs_shap_path_dependent": 0.028806839138269424,
+      "share_of_total": 0.017059352981715712,
+      "group": "other"
+    },
+    {
+      "label": "BILL_AMT3",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 20,
+      "mean_abs_shap": 0.02812171378094858,
+      "mean_shap": 0.004628405906475278,
+      "mean_abs_shap_path_dependent": 0.023720286786556244,
+      "share_of_total": 0.016584685317575204,
+      "group": "bill"
+    },
+    {
+      "label": "BILL_AMT5",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 21,
+      "mean_abs_shap": 0.023243751786133842,
+      "mean_shap": -0.003667534339838606,
+      "mean_abs_shap_path_dependent": 0.02000631019473076,
+      "share_of_total": 0.013707923776466704,
+      "group": "bill"
+    },
+    {
+      "label": "BILL_AMT4",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 22,
+      "mean_abs_shap": 0.02008502735525596,
+      "mean_shap": 0.0020842833368638356,
+      "mean_abs_shap_path_dependent": 0.016638966277241707,
+      "share_of_total": 0.01184507675728765,
+      "group": "bill"
+    },
+    {
+      "label": "EDUCATION",
+      "params": {},
+      "n_features": 1,
+      "cv": null,
+      "test": null,
+      "rank": 23,
+      "mean_abs_shap": 0.010685794143028062,
+      "mean_shap": -0.0022436864334929507,
+      "mean_abs_shap_path_dependent": 0.015984542667865753,
+      "share_of_total": 0.006301910851200292,
+      "group": "other"
+    }
+  ],
+  "notes": "TreeSHAP on 2,000 stratified held-out rows with a 1000-row stratified background from train. Additivity holds to 3.7e-06 in log-odds space. Interventional and path-dependent mean|SHAP| rankings agree at Spearman rho 0.9733. Top five by mean|SHAP|: PAY_0, LIMIT_BAL, BILL_AMT1, PAY_AMT2, PAY_AMT1. Repayment-status columns carry 40.2% of total attribution against 16.5% for the six BILL_AMT columns. Convergent validation: mean SHAP by PAY_0 code correlates with the observed default rate at Spearman rho 0.7000, so the model's internals independently reproduce the non-monotonic gradient Phase 1 measured in the raw data (12.8% at -1, 16.8% at 0, 34.0% at 1, 69.2% at 2). The model was never told PAY_n is ordinal; it recovered the shape from the data. Caveat on collinearity: BILL_AMT1-6 carry VIF 13.9-25.7 (Phase 1 Fig 2.14), so TreeSHAP splits credit arbitrarily among them. Individual BILL_AMT attributions are unstable and must be read as a group total, not per column. Caveat on interpretation: SHAP attributes the model's output, not a causal mechanism -- it answers 'why did this model decide that', which is the auditability question, and not 'what would happen if we changed this'."
+}

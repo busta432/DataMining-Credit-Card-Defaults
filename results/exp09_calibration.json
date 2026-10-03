@@ -1,0 +1,695 @@
+{
+  "experiment_id": "exp09_calibration",
+  "title": "Calibration: Brier, ECE and reliability curves",
+  "run_utc": "2026-09-30T09:47:53Z",
+  "seed": 42,
+  "versions": {
+    "python": "3.14.3",
+    "numpy": "2.5.3",
+    "sklearn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.52.0",
+    "optuna": "5.0.0",
+    "imblearn": "0.14.2",
+    "pandas": "3.0.6"
+  },
+  "runtime_sec": 16.0,
+  "config": {
+    "n_bins": 10,
+    "calib_size": 0.2,
+    "prevalence": 0.22116468378209142,
+    "scale_pos_weight": 3.5215175537938843,
+    "reliability_curves": {
+      "A_spw1_raw": [
+        {
+          "bin": 0,
+          "lo": 0.0,
+          "hi": 0.1,
+          "n": 4499,
+          "mean_pred": 0.07493281081504333,
+          "frac_pos": 0.06623694154256501
+        },
+        {
+          "bin": 1,
+          "lo": 0.1,
+          "hi": 0.2,
+          "n": 11139,
+          "mean_pred": 0.14271222790451513,
+          "frac_pos": 0.12586408115629769
+        },
+        {
+          "bin": 2,
+          "lo": 0.2,
+          "hi": 0.30000000000000004,
+          "n": 3416,
+          "mean_pred": 0.24070977407400726,
+          "frac_pos": 0.2529274004683841
+        },
+        {
+          "bin": 3,
+          "lo": 0.30000000000000004,
+          "hi": 0.4,
+          "n": 1508,
+          "mean_pred": 0.34763387531358303,
+          "frac_pos": 0.3746684350132626
+        },
+        {
+          "bin": 4,
+          "lo": 0.4,
+          "hi": 0.5,
+          "n": 998,
+          "mean_pred": 0.4465562692266667,
+          "frac_pos": 0.4939879759519038
+        },
+        {
+          "bin": 5,
+          "lo": 0.5,
+          "hi": 0.6000000000000001,
+          "n": 938,
+          "mean_pred": 0.5541214906711822,
+          "frac_pos": 0.650319829424307
+        },
+        {
+          "bin": 6,
+          "lo": 0.6000000000000001,
+          "hi": 0.7000000000000001,
+          "n": 835,
+          "mean_pred": 0.6452527400262341,
+          "frac_pos": 0.7125748502994012
+        },
+        {
+          "bin": 7,
+          "lo": 0.7000000000000001,
+          "hi": 0.8,
+          "n": 566,
+          "mean_pred": 0.740861755483142,
+          "frac_pos": 0.7455830388692579
+        },
+        {
+          "bin": 8,
+          "lo": 0.8,
+          "hi": 0.9,
+          "n": 56,
+          "mean_pred": 0.8321349237646375,
+          "frac_pos": 0.875
+        },
+        {
+          "bin": 9,
+          "lo": 0.9,
+          "hi": 1.0,
+          "n": 0,
+          "mean_pred": null,
+          "frac_pos": null
+        }
+      ],
+      "A_spw1_sigmoid": [
+        {
+          "bin": 0,
+          "lo": 0.0,
+          "hi": 0.1,
+          "n": 4262,
+          "mean_pred": 0.09257174730119015,
+          "frac_pos": 0.05232285312060066
+        },
+        {
+          "bin": 1,
+          "lo": 0.1,
+          "hi": 0.2,
+          "n": 12830,
+          "mean_pred": 0.1345514853902099,
+          "frac_pos": 0.1406079501169135
+        },
+        {
+          "bin": 2,
+          "lo": 0.2,
+          "hi": 0.30000000000000004,
+          "n": 2332,
+          "mean_pred": 0.24080321547422462,
+          "frac_pos": 0.2727272727272727
+        },
+        {
+          "bin": 3,
+          "lo": 0.30000000000000004,
+          "hi": 0.4,
+          "n": 1069,
+          "mean_pred": 0.345664793100041,
+          "frac_pos": 0.411599625818522
+        },
+        {
+          "bin": 4,
+          "lo": 0.4,
+          "hi": 0.5,
+          "n": 648,
+          "mean_pred": 0.44959335090396996,
+          "frac_pos": 0.44907407407407407
+        },
+        {
+          "bin": 5,
+          "lo": 0.5,
+          "hi": 0.6000000000000001,
+          "n": 569,
+          "mean_pred": 0.545453821871178,
+          "frac_pos": 0.5272407732864675
+        },
+        {
+          "bin": 6,
+          "lo": 0.6000000000000001,
+          "hi": 0.7000000000000001,
+          "n": 667,
+          "mean_pred": 0.6545337972557408,
+          "frac_pos": 0.6536731634182908
+        },
+        {
+          "bin": 7,
+          "lo": 0.7000000000000001,
+          "hi": 0.8,
+          "n": 1105,
+          "mean_pred": 0.7577082487895752,
+          "frac_pos": 0.7285067873303167
+        },
+        {
+          "bin": 8,
+          "lo": 0.8,
+          "hi": 0.9,
+          "n": 473,
+          "mean_pred": 0.8115804884855259,
+          "frac_pos": 0.7674418604651163
+        },
+        {
+          "bin": 9,
+          "lo": 0.9,
+          "hi": 1.0,
+          "n": 0,
+          "mean_pred": null,
+          "frac_pos": null
+        }
+      ],
+      "A_spw1_isotonic": [
+        {
+          "bin": 0,
+          "lo": 0.0,
+          "hi": 0.1,
+          "n": 6783,
+          "mean_pred": 0.06251565195604201,
+          "frac_pos": 0.07194456730060446
+        },
+        {
+          "bin": 1,
+          "lo": 0.1,
+          "hi": 0.2,
+          "n": 9646,
+          "mean_pred": 0.1509019700536497,
+          "frac_pos": 0.14565623056189095
+        },
+        {
+          "bin": 2,
+          "lo": 0.2,
+          "hi": 0.30000000000000004,
+          "n": 1764,
+          "mean_pred": 0.2396159766415079,
+          "frac_pos": 0.2290249433106576
+        },
+        {
+          "bin": 3,
+          "lo": 0.30000000000000004,
+          "hi": 0.4,
+          "n": 2359,
+          "mean_pred": 0.35134663441364117,
+          "frac_pos": 0.34675710046629926
+        },
+        {
+          "bin": 4,
+          "lo": 0.4,
+          "hi": 0.5,
+          "n": 695,
+          "mean_pred": 0.4585233791697797,
+          "frac_pos": 0.47338129496402875
+        },
+        {
+          "bin": 5,
+          "lo": 0.5,
+          "hi": 0.6000000000000001,
+          "n": 880,
+          "mean_pred": 0.566054626960646,
+          "frac_pos": 0.6125
+        },
+        {
+          "bin": 6,
+          "lo": 0.6000000000000001,
+          "hi": 0.7000000000000001,
+          "n": 225,
+          "mean_pred": 0.6376659552256266,
+          "frac_pos": 0.6133333333333333
+        },
+        {
+          "bin": 7,
+          "lo": 0.7000000000000001,
+          "hi": 0.8,
+          "n": 1362,
+          "mean_pred": 0.7402425387794926,
+          "frac_pos": 0.724669603524229
+        },
+        {
+          "bin": 8,
+          "lo": 0.8,
+          "hi": 0.9,
+          "n": 142,
+          "mean_pred": 0.847000990954923,
+          "frac_pos": 0.7605633802816901
+        },
+        {
+          "bin": 9,
+          "lo": 0.9,
+          "hi": 1.0,
+          "n": 99,
+          "mean_pred": 0.9370412284677679,
+          "frac_pos": 0.8282828282828283
+        }
+      ],
+      "C_spw_raw": [
+        {
+          "bin": 0,
+          "lo": 0.0,
+          "hi": 0.1,
+          "n": 170,
+          "mean_pred": 0.08800368536921109,
+          "frac_pos": 0.023529411764705882
+        },
+        {
+          "bin": 1,
+          "lo": 0.1,
+          "hi": 0.2,
+          "n": 1970,
+          "mean_pred": 0.157137775867421,
+          "frac_pos": 0.046700507614213196
+        },
+        {
+          "bin": 2,
+          "lo": 0.2,
+          "hi": 0.30000000000000004,
+          "n": 5222,
+          "mean_pred": 0.2532710869483042,
+          "frac_pos": 0.08119494446572195
+        },
+        {
+          "bin": 3,
+          "lo": 0.30000000000000004,
+          "hi": 0.4,
+          "n": 5520,
+          "mean_pred": 0.3487327691329562,
+          "frac_pos": 0.13242753623188405
+        },
+        {
+          "bin": 4,
+          "lo": 0.4,
+          "hi": 0.5,
+          "n": 3982,
+          "mean_pred": 0.4431133164361396,
+          "frac_pos": 0.1800602712204922
+        },
+        {
+          "bin": 5,
+          "lo": 0.5,
+          "hi": 0.6000000000000001,
+          "n": 2125,
+          "mean_pred": 0.5452023154707516,
+          "frac_pos": 0.2630588235294118
+        },
+        {
+          "bin": 6,
+          "lo": 0.6000000000000001,
+          "hi": 0.7000000000000001,
+          "n": 1535,
+          "mean_pred": 0.6480415242502666,
+          "frac_pos": 0.3785016286644951
+        },
+        {
+          "bin": 7,
+          "lo": 0.7000000000000001,
+          "hi": 0.8,
+          "n": 1267,
+          "mean_pred": 0.7451161292000088,
+          "frac_pos": 0.5193370165745856
+        },
+        {
+          "bin": 8,
+          "lo": 0.8,
+          "hi": 0.9,
+          "n": 1682,
+          "mean_pred": 0.8476385618432666,
+          "frac_pos": 0.6890606420927468
+        },
+        {
+          "bin": 9,
+          "lo": 0.9,
+          "hi": 1.0,
+          "n": 482,
+          "mean_pred": 0.911921817484733,
+          "frac_pos": 0.7738589211618258
+        }
+      ],
+      "C_spw_sigmoid": [
+        {
+          "bin": 0,
+          "lo": 0.0,
+          "hi": 0.1,
+          "n": 7774,
+          "mean_pred": 0.07155736348679784,
+          "frac_pos": 0.07113455106766144
+        },
+        {
+          "bin": 1,
+          "lo": 0.1,
+          "hi": 0.2,
+          "n": 7863,
+          "mean_pred": 0.14192586390939252,
+          "frac_pos": 0.14612743227775657
+        },
+        {
+          "bin": 2,
+          "lo": 0.2,
+          "hi": 0.30000000000000004,
+          "n": 2655,
+          "mean_pred": 0.24384590008386964,
+          "frac_pos": 0.23126177024482109
+        },
+        {
+          "bin": 3,
+          "lo": 0.30000000000000004,
+          "hi": 0.4,
+          "n": 1413,
+          "mean_pred": 0.348140379504814,
+          "frac_pos": 0.32554847841472045
+        },
+        {
+          "bin": 4,
+          "lo": 0.4,
+          "hi": 0.5,
+          "n": 1093,
+          "mean_pred": 0.44767525554285903,
+          "frac_pos": 0.40988106129917656
+        },
+        {
+          "bin": 5,
+          "lo": 0.5,
+          "hi": 0.6000000000000001,
+          "n": 897,
+          "mean_pred": 0.5488386938741945,
+          "frac_pos": 0.5094760312151616
+        },
+        {
+          "bin": 6,
+          "lo": 0.6000000000000001,
+          "hi": 0.7000000000000001,
+          "n": 1693,
+          "mean_pred": 0.6597124219191758,
+          "frac_pos": 0.7052569403425871
+        },
+        {
+          "bin": 7,
+          "lo": 0.7000000000000001,
+          "hi": 0.8,
+          "n": 567,
+          "mean_pred": 0.7100449533410909,
+          "frac_pos": 0.746031746031746
+        },
+        {
+          "bin": 8,
+          "lo": 0.8,
+          "hi": 0.9,
+          "n": 0,
+          "mean_pred": null,
+          "frac_pos": null
+        },
+        {
+          "bin": 9,
+          "lo": 0.9,
+          "hi": 1.0,
+          "n": 0,
+          "mean_pred": null,
+          "frac_pos": null
+        }
+      ],
+      "C_spw_isotonic": [
+        {
+          "bin": 0,
+          "lo": 0.0,
+          "hi": 0.1,
+          "n": 6045,
+          "mean_pred": 0.055377118607807356,
+          "frac_pos": 0.06220016542597188
+        },
+        {
+          "bin": 1,
+          "lo": 0.1,
+          "hi": 0.2,
+          "n": 10052,
+          "mean_pred": 0.14660968438644736,
+          "frac_pos": 0.14544369279745326
+        },
+        {
+          "bin": 2,
+          "lo": 0.2,
+          "hi": 0.30000000000000004,
+          "n": 2311,
+          "mean_pred": 0.23860413233267183,
+          "frac_pos": 0.22025097360450022
+        },
+        {
+          "bin": 3,
+          "lo": 0.30000000000000004,
+          "hi": 0.4,
+          "n": 1906,
+          "mean_pred": 0.3505724439747311,
+          "frac_pos": 0.35362014690451204
+        },
+        {
+          "bin": 4,
+          "lo": 0.4,
+          "hi": 0.5,
+          "n": 958,
+          "mean_pred": 0.4394505403173741,
+          "frac_pos": 0.46868475991649267
+        },
+        {
+          "bin": 5,
+          "lo": 0.5,
+          "hi": 0.6000000000000001,
+          "n": 574,
+          "mean_pred": 0.5574533881210699,
+          "frac_pos": 0.5331010452961672
+        },
+        {
+          "bin": 6,
+          "lo": 0.6000000000000001,
+          "hi": 0.7000000000000001,
+          "n": 763,
+          "mean_pred": 0.6702763542903986,
+          "frac_pos": 0.6893840104849279
+        },
+        {
+          "bin": 7,
+          "lo": 0.7000000000000001,
+          "hi": 0.8,
+          "n": 1080,
+          "mean_pred": 0.7467514272641252,
+          "frac_pos": 0.7333333333333333
+        },
+        {
+          "bin": 8,
+          "lo": 0.8,
+          "hi": 0.9,
+          "n": 255,
+          "mean_pred": 0.8346323810371699,
+          "frac_pos": 0.7568627450980392
+        },
+        {
+          "bin": 9,
+          "lo": 0.9,
+          "hi": 1.0,
+          "n": 11,
+          "mean_pred": 1.0,
+          "frac_pos": 1.0
+        }
+      ]
+    },
+    "params_c_source": "exp03"
+  },
+  "rows": [
+    {
+      "label": "A_spw1_raw",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7776135657777639,
+        "roc_auc_sd": null,
+        "pr_auc_mean": 0.549446167577618,
+        "pr_auc_sd": null,
+        "brier_mean": 0.13557774020391639,
+        "brier_sd": null,
+        "n_fits": 5
+      },
+      "test": null,
+      "arm": "A_spw1",
+      "method": "raw",
+      "ece": 0.021212911211923022,
+      "spw": 1.0,
+      "mean_predicted": 0.21888679427630692
+    },
+    {
+      "label": "A_spw1_sigmoid",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7811734095918829,
+        "roc_auc_sd": null,
+        "pr_auc_mean": 0.5536130423481669,
+        "pr_auc_sd": null,
+        "brier_mean": 0.134851338490445,
+        "brier_sd": null,
+        "n_fits": 5
+      },
+      "test": null,
+      "arm": "A_spw1",
+      "method": "sigmoid",
+      "ece": 0.019144037232211655,
+      "spw": 1.0,
+      "mean_predicted": 0.2217208954969771
+    },
+    {
+      "label": "A_spw1_isotonic",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.778345293802346,
+        "roc_auc_sd": null,
+        "pr_auc_mean": 0.5458198303098507,
+        "pr_auc_sd": null,
+        "brier_mean": 0.1349410821600686,
+        "brier_sd": null,
+        "n_fits": 5
+      },
+      "test": null,
+      "arm": "A_spw1",
+      "method": "isotonic",
+      "ece": 0.01022711789296803,
+      "spw": 1.0,
+      "mean_predicted": 0.22177756560461057
+    },
+    {
+      "label": "C_spw_raw",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.011204389006721466,
+        "min_child_weight": 15.719632748673966,
+        "subsample": 0.8726680299732419,
+        "colsample_bytree": 0.795507846386498,
+        "gamma": 3.561706833053609,
+        "reg_lambda": 28.92053414512721,
+        "reg_alpha": 8.68059488934926
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7795848230173719,
+        "roc_auc_sd": null,
+        "pr_auc_mean": 0.5491939028804577,
+        "pr_auc_sd": null,
+        "brier_mean": 0.18120674749708016,
+        "brier_sd": null,
+        "n_fits": 5
+      },
+      "test": null,
+      "arm": "C_spw",
+      "method": "raw",
+      "ece": 0.20877566042672466,
+      "spw": 3.5215175537938843,
+      "mean_predicted": 0.4299403442088161
+    },
+    {
+      "label": "C_spw_sigmoid",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.011204389006721466,
+        "min_child_weight": 15.719632748673966,
+        "subsample": 0.8726680299732419,
+        "colsample_bytree": 0.795507846386498,
+        "gamma": 3.561706833053609,
+        "reg_lambda": 28.92053414512721,
+        "reg_alpha": 8.68059488934926
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7815396403407662,
+        "roc_auc_sd": null,
+        "pr_auc_mean": 0.547463705017211,
+        "pr_auc_sd": null,
+        "brier_mean": 0.13459811566978644,
+        "brier_sd": null,
+        "n_fits": 5
+      },
+      "test": null,
+      "arm": "C_spw",
+      "method": "sigmoid",
+      "ece": 0.011512662936744869,
+      "spw": 3.5215175537938843,
+      "mean_predicted": 0.2217778841242311
+    },
+    {
+      "label": "C_spw_isotonic",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.011204389006721466,
+        "min_child_weight": 15.719632748673966,
+        "subsample": 0.8726680299732419,
+        "colsample_bytree": 0.795507846386498,
+        "gamma": 3.561706833053609,
+        "reg_lambda": 28.92053414512721,
+        "reg_alpha": 8.68059488934926
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7794178541698701,
+        "roc_auc_sd": null,
+        "pr_auc_mean": 0.5449918620353928,
+        "pr_auc_sd": null,
+        "brier_mean": 0.13478341976276056,
+        "brier_sd": null,
+        "n_fits": 5
+      },
+      "test": null,
+      "arm": "C_spw",
+      "method": "isotonic",
+      "ece": 0.008018180109244405,
+      "spw": 3.5215175537938843,
+      "mean_predicted": 0.2216988510462222
+    }
+  ],
+  "notes": "Prevalence is 0.2212. The spw=1 model predicts a mean probability of 0.2189 -- essentially the base rate -- with Brier 0.13558 and ECE 0.02121. Reweighting to spw=3.52 inflates the mean prediction to 0.4299 and worsens Brier to 0.18121 (ECE 0.20878), because scale_pos_weight shifts the score distribution without changing the underlying event rate. That is the concrete cost of reweighting that ROC-AUC cannot see. Best Brier overall: C_spw_sigmoid at 0.13460. Arm B of exp03 is omitted here because it is arm A's fitted model read at a different threshold -- its probabilities are identical, which is precisely why threshold-moving is preferable to reweighting when probabilities are consumed downstream. Reliability curves (10 equal-width bins) are serialised in config for WP19."
+}

@@ -1,0 +1,246 @@
+
+/* ===================================== 15. encoding ablation (#enc-tbl) */
+const ENC_TEST = {
+  native_int: "The baseline. Trees recover non-monotonicity by stacking axis-aligned splits, so the ordinal coding costs depth, not expressible functions.",
+  one_hot: "Whether explicit indicators help. They cannot add information \u2014 the same partitions are reachable \u2014 but they dilute colsample_bytree across 79 columns.",
+  native_categorical: "XGBoost's partition-based categorical splits, which can separate {\u22121, 2} from {0, 1} in a single node rather than two stacked ones.",
+  signed_log_monetary: "A control, not a candidate. If trees are invariant to monotone transforms, this must land on the baseline exactly."
+};
+
+function buildEncodingTable() {
+  const base = ENC.native_int;
+  fillTable("enc-tbl", AB.encoding.rows.map(r => Object.assign({}, r, {
+    __cls: r.label === "native_int" ? "hi" : null
+  })), [
+    { k: "label", fmt: (v, r) => "<code>" + v + "</code><br><span class=\"small muted\">" +
+        r.description + "</span>" },
+    { k: "n_features", cls: "num" },
+    { k: "auc", cls: "num", fmt: v => f4(v) },
+    { k: "sd", cls: "num muted", fmt: v => "\u00b1" + f4(v) },
+    { k: "pr", cls: "num", fmt: v => f4(v) },
+    { k: "label", fmt: v => '<span class="small">' + (ENC_TEST[v] || "") +
+        (v === "signed_log_monetary" && base &&
+         Math.abs(ENC[v].auc - base.auc) < 1e-12
+          ? " <strong>It does, to every decimal place.</strong>" : "") + "</span>" }
+  ]);
+}
+
+/* ===================================== 16. engineered features (#eng-tbl) */
+function buildEngineeredTable() {
+  const base = ENG.raw_23;
+  fillTable("eng-tbl", AB.engineered.rows.map(r => Object.assign({}, r, {
+    delta: base ? r.auc - base.auc : null,
+    __cls: r.label === "raw_23" ? "hi" : null
+  })), [
+    { k: "label", fmt: v => "<code>" + v + "</code>" },
+    { k: "n_features", cls: "num" },
+    { k: "n_engineered", cls: "num muted" },
+    { k: "auc", cls: "num", fmt: v => f4(v) },
+    { k: "sd", cls: "num muted", fmt: v => "\u00b1" + f4(v) },
+    { k: "delta", cls: (v, r) => {
+        if (v === null || r.label === "raw_23") return "num muted";
+        /* Anything inside one fold-SD is not a result; it must not be coloured
+           as though it were. */
+        if (Math.abs(v) < (r.sd || 0)) return "num muted";
+        return "num " + (v > 0 ? "good" : "bad"); },
+      fmt: (v, r) => r.label === "raw_23" ? "baseline" :
+        sg(v, 4) + (Math.abs(v) < (r.sd || 0) ? ' <span class="chip">&lt;1 SD</span>' : "") },
+    { k: "pr", cls: "num", fmt: v => f4(v) }
+  ]);
+}
+
+/* ===================================== 17. feature-group ablation (#grp-*)
+   Two views of the same eleven arms. They disagree, and the disagreement is
+   the finding: only-one measures how predictive a group is in isolation,
+   leave-one-out measures how irreplaceable it is given everything else.
+   Redundant-but-predictive groups score high on the first and near zero on
+   the second, which is exactly what BILL_AMT does. */
+const GRP_READ = {
+  pay_status: "Dominant on both views: predictive alone and irreplaceable in company. This is the Phase 1 conclusion, now measured.",
+  bill: "Predictive alone, nearly free to remove. The information is recoverable from the other groups \u2014 and the VIF of 13.9\u201325.7 within these six columns says why.",
+  pay_amt: "Weak alone and weak to remove. Payment amounts without the bill they settle carry little signal.",
+  limit: "Small on both views but consistently non-zero. It is one column doing a disproportionate amount of work, which is why it doubles as the EAD proxy in \u00a79.",
+  demographic: "The smallest leave-one-out loss of any group. Removing it costs almost nothing \u2014 which sets up the uncomfortable question \u00a713 then asks."
+};
+
+function buildGroupAblation() {
+  const defs = AB.groups.defs;
+  const keys = Object.keys(defs);
+
+  function draw(mode) {
+    const src = mode === "only" ? AB.groups.only : AB.groups.loo;
+    const rows = keys.map(k => ({ k: k, v: src[k], n: defs[k].length }))
+                     .sort((a, b) => b.v - a.v);
+    const hi = Math.max.apply(null, rows.map(r => r.v));
+    const nd = nice(0, hi, 5);
+
+    const fr = frame({
+      w: 760, h: 320, pad: { l: 118, r: 60, t: 16, b: 44 },
+      xdom: [0, nd.hi], ydom: [rows.length - 0.5, -0.5],
+      yticks: [], xticks: nd.ticks.map(v => ({ v: v, label: mode === "only" ? v.toFixed(2) : v.toFixed(3) })),
+      xgrid: true,
+      xlabel: mode === "only" ? "ROC-AUC using this group alone"
+                              : "ROC-AUC lost when this group is removed"
+    });
+
+    rows.forEach((r, i) => {
+      const bh = 26;
+      const g = el("g");
+      g.appendChild(el("rect", {
+        x: fr.x(0), y: fr.y(i) - bh / 2, width: Math.max(1.5, fr.x(r.v) - fr.x(0)),
+        height: bh, rx: 3,
+        style: "fill:" + (r.k === "pay_status" ? C.acc2 : r.k === "demographic" ? C.ink3 : C.acc) +
+               ";opacity:.85" }));
+      g.appendChild(el("title", {}, r.k + " (" + r.n + " columns): " +
+        (mode === "only" ? "ROC-AUC " + f4(r.v) + " alone" : "costs " + f4(r.v) + " to remove")));
+      fr.g.appendChild(g);
+      fr.svg.appendChild(el("text", { x: fr.ix[0] - 10, y: fr.y(i) + 4, "text-anchor": "end",
+        style: "fill:var(--ink2);font-size:11.5px;font-family:var(--mono)" }, r.k));
+      fr.svg.appendChild(el("text", { x: fr.x(r.v) + 8, y: fr.y(i) + 4,
+        style: "fill:var(--ink3);font-size:10.8px;font-family:var(--mono)" }, f4(r.v)));
+    });
+
+    if (mode === "only") {
+      vline(fr, 0.5, C.ink3, "3 3", "coin flip");
+      const all = GRP.all_groups;
+      if (all) vline(fr, Math.min(all.auc, nd.hi), C.good, "4 3", "all groups " + f4(all.auc));
+    }
+    drawInto("grp-chart", fr);
+
+    fillTable("grp-tbl", keys.map(k => ({
+      k: k, n: defs[k].length, only: AB.groups.only[k], loo: AB.groups.loo[k],
+      read: GRP_READ[k] || "",
+      __cls: k === "pay_status" ? "hi" : null
+    })).sort((a, b) => b.loo - a.loo), [
+      { k: "k", fmt: (v, r) => "<code>" + v + "</code><br><span class=\"small muted\">" +
+          defs[v].join(", ") + "</span>" },
+      { k: "n", cls: "num" },
+      { k: "only", cls: "num", fmt: v => f4(v) },
+      { k: "loo", cls: v => "num " + (v > 0.02 ? "bad" : v < 0.003 ? "muted" : ""),
+        fmt: v => sg(-v, 4) },
+      { k: "read", fmt: v => '<span class="small">' + v + "</span>" }
+    ]);
+  }
+
+  seg("grp-seg", "data-v", draw);
+  REDRAW.push(() => { const b = $("#grp-seg button.on"); if (b) draw(b.getAttribute("data-v")); });
+}
+
+/* ===================================== 18. recency ablation (#rec-*)
+   How much statement history is worth collecting. The marginal series is the
+   operational answer, and it goes negative, which is the interesting part. */
+function buildRecency() {
+  const rows = AB.recency.rows.slice().sort((a, b) => a.k_months - b.k_months);
+  const full = rows[rows.length - 1];
+  const vs = rows.map(r => r.auc), sds = rows.map(r => r.sd || 0);
+  const nd = nice(Math.min.apply(null, vs) - Math.max.apply(null, sds) * 1.4,
+                  Math.max.apply(null, vs) + Math.max.apply(null, sds) * 1.4, 5);
+
+  const fr = frame({
+    w: 760, h: 320, pad: { l: 64, r: 54, t: 18, b: 46 },
+    xdom: [0.7, rows.length + 0.3], ydom: [nd.lo, nd.hi], yticks: nd.ticks,
+    yfmt: v => v.toFixed(3),
+    xticks: rows.map(r => ({ v: r.k_months, label: "k = " + r.k_months })), xgrid: true,
+    ylabel: "ROC-AUC", xlabel: "months of statement history retained (most recent first)"
+  });
+
+  band(fr, rows.map(r => [r.k_months, r.auc + (r.sd || 0), r.auc - (r.sd || 0)]), C.acc);
+  line(fr, rows.map(r => [r.k_months, r.auc]), C.acc, 2.3);
+  rows.forEach(r => {
+    const isSmall = r.k_months === AB.recency.smallest_k;
+    ebar(fr, r.k_months, r.auc - (r.sd || 0), r.auc + (r.sd || 0), C.acc);
+    dot(fr, r.k_months, r.auc, isSmall ? C.good : C.acc, isSmall ? 5.6 : 4,
+      "k = " + r.k_months + "  \u00b7  " + r.n_features + " features  \u00b7  ROC-AUC " +
+      f4(r.auc) + " \u00b1 " + f4(r.sd) + "  \u00b7  months: " + r.months.join(", "));
+  });
+  hline(fr, full.auc, C.ink3, "3 4", "all six months");
+  /* One fold-SD either side of the full model: anything inside this band is
+     operationally equivalent to collecting all six months. */
+  const lo = full.auc - (full.sd || 0);
+  hline(fr, lo, C.warn, "1 3", "\u22121 SD of full");
+  if (AB.recency.smallest_k) {
+    const sm = rows.find(r => r.k_months === AB.recency.smallest_k);
+    if (sm) fr.g.appendChild(el("text", {
+      x: fr.x(sm.k_months) + 9, y: fr.y(sm.auc) + 17,
+      style: "fill:" + C.good + ";font-size:10.5px" },
+      "smallest k within 1 SD of the full model"));
+  }
+  drawInto("rec-chart", fr);
+
+  fillTable("rec-tbl", rows.map((r, i) => Object.assign({}, r, {
+    marg: i === 0 ? null : r.auc - rows[i - 1].auc,
+    __cls: r.k_months === AB.recency.smallest_k ? "hi" : null
+  })), [
+    { k: "k_months", cls: "num" },
+    { k: "months", fmt: v => '<span class="small"><code>' + v.join("</code>, <code>") + "</code></span>" },
+    { k: "n_features", cls: "num" },
+    { k: "auc", cls: "num", fmt: v => f4(v) },
+    { k: "sd", cls: "num muted", fmt: v => "\u00b1" + f4(v) },
+    { k: "marg", cls: (v, r) => v === null ? "num muted"
+        : "num " + (Math.abs(v) < (r.sd || 0) ? "muted" : v > 0 ? "good" : "bad"),
+      fmt: (v, r) => v === null ? "\u2014" :
+        sg(v, 4) + (Math.abs(v) < (r.sd || 0) ? ' <span class="chip">&lt;1 SD</span>' : "") }
+  ]);
+}
+
+/* ===================================== 19. learning curve (#lc-*)
+   Two curves, because one is not interpretable alone. A flat validation curve
+   could mean either "enough data" or "model at capacity"; the gap between the
+   curves distinguishes them. A constant gap plus a flat validation curve is
+   the feature-set ceiling. */
+function buildLearningCurve() {
+  const rows = AB.learning.rows.slice().sort((a, b) => a.fraction - b.fraction);
+  const allv = rows.map(r => r.auc).concat(rows.map(r => r.train_roc_auc_mean));
+  const sdm = Math.max.apply(null, rows.map(r => Math.max(r.sd || 0, r.train_roc_auc_sd || 0)));
+  const nd = nice(Math.min.apply(null, allv) - sdm * 1.3,
+                  Math.max.apply(null, allv) + sdm * 1.3, 5);
+
+  const fr = frame({
+    w: 760, h: 340, pad: { l: 64, r: 58, t: 18, b: 48 },
+    xdom: [0, 1.04], ydom: [nd.lo, nd.hi], yticks: nd.ticks, yfmt: v => v.toFixed(3),
+    xticks: rows.map(r => ({ v: r.fraction, label: Math.round(r.fraction * 100) + "%" })),
+    xgrid: true,
+    ylabel: "ROC-AUC", xlabel: "fraction of the training portion used"
+  });
+
+  band(fr, rows.map(r => [r.fraction, r.train_roc_auc_mean + (r.train_roc_auc_sd || 0),
+                                      r.train_roc_auc_mean - (r.train_roc_auc_sd || 0)]), C.warn);
+  band(fr, rows.map(r => [r.fraction, r.auc + (r.sd || 0), r.auc - (r.sd || 0)]), C.acc);
+  line(fr, rows.map(r => [r.fraction, r.train_roc_auc_mean]), C.warn, 2, "6 4");
+  line(fr, rows.map(r => [r.fraction, r.auc]), C.acc, 2.4);
+
+  rows.forEach(r => {
+    dot(fr, r.fraction, r.auc, C.acc, 4.2,
+      Math.round(r.fraction * 100) + "%  \u00b7  " + int(r.n_train_rows_mean) +
+      " rows  \u00b7  validation " + f4(r.auc) + " \u00b1 " + f4(r.sd));
+    dot(fr, r.fraction, r.train_roc_auc_mean, C.warn, 3.4,
+      Math.round(r.fraction * 100) + "%  \u00b7  training " + f4(r.train_roc_auc_mean) +
+      "  \u00b7  gap " + f4(r.gap_train_minus_val));
+    /* The gap drawn as a vertical connector: its constancy is the argument. */
+    fr.g.appendChild(el("line", {
+      x1: fr.x(r.fraction), y1: fr.y(r.auc), x2: fr.x(r.fraction), y2: fr.y(r.train_roc_auc_mean),
+      style: "stroke:var(--ink3);stroke-width:1;stroke-dasharray:2 2;opacity:.6" }));
+  });
+
+  const last = rows[rows.length - 1];
+  hline(fr, last.auc, C.good, "3 4", "full data " + f4(last.auc));
+  legend(fr, [{ c: C.acc, t: "validation (out-of-fold)" },
+              { c: C.warn, t: "training (in-sample)" }], fr.ix[0] + 8, fr.iy[1] + 14);
+  drawInto("lc-chart", fr);
+
+  fillTable("lc-tbl", rows.map((r, i) => Object.assign({}, r, {
+    marg: i === 0 ? null : r.auc - rows[i - 1].auc,
+    __cls: r.fraction === 1 ? "hi" : null
+  })), [
+    { k: "fraction", cls: "num", fmt: v => Math.round(v * 100) + "%" },
+    { k: "n_train_rows_mean", cls: "num", fmt: v => int(v) },
+    { k: "auc", cls: "num", fmt: v => f4(v) },
+    { k: "sd", cls: "num muted", fmt: v => "\u00b1" + f4(v) },
+    { k: "train_roc_auc_mean", cls: "num muted", fmt: v => f4(v) },
+    { k: "gap_train_minus_val", cls: "num", fmt: v => f4(v) },
+    { k: "marg", cls: (v, r) => v === null ? "num muted"
+        : "num " + (Math.abs(v) < (r.sd || 0) ? "muted" : v > 0 ? "good" : "bad"),
+      fmt: (v, r) => v === null ? "\u2014" :
+        sg(v, 4) + (Math.abs(v) < (r.sd || 0) ? ' <span class="chip">&lt;1 SD</span>' : "") }
+  ]);
+}

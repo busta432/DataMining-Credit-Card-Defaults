@@ -1,0 +1,202 @@
+
+/* ===================================== 13. reliability diagram (#rel-*)
+   The diagonal is perfect calibration. Point area is proportional to bin
+   population, which is the honest way to draw this: without it the sparse
+   high-probability bins look like evidence rather than noise. */
+const REL_NAME = {
+  A_spw1_raw:      "arm A (spw = 1), raw",
+  A_spw1_sigmoid:  "arm A + Platt scaling",
+  A_spw1_isotonic: "arm A + isotonic regression",
+  C_spw_raw:       "arm C (scale_pos_weight), raw",
+  C_spw_sigmoid:   "arm C + Platt scaling",
+  C_spw_isotonic:  "arm C + isotonic regression"
+};
+
+function buildReliability() {
+  function draw(key) {
+    const bins = DATA.calibration.curves[key];
+    const row = CAL[key];
+    if (!bins || !row) return;
+
+    const fr = frame({
+      w: 760, h: 420, pad: { l: 58, r: 18, t: 18, b: 44 },
+      xdom: [0, 1], ydom: [0, 1],
+      yticks: [0, 0.2, 0.4, 0.6, 0.8, 1], yfmt: v => v.toFixed(1),
+      xticks: [0, 0.2, 0.4, 0.6, 0.8, 1].map(v => ({ v: v, label: v.toFixed(1) })),
+      xgrid: true,
+      ylabel: "observed default rate in bin", xlabel: "mean predicted probability in bin"
+    });
+
+    /* Perfect calibration. */
+    fr.g.appendChild(el("line", { x1: fr.x(0), y1: fr.y(0), x2: fr.x(1), y2: fr.y(1),
+      style: "stroke:var(--ink3);stroke-width:1.3;stroke-dasharray:5 4" }));
+    fr.g.appendChild(el("text", { x: fr.x(0.74), y: fr.y(0.78),
+      style: "fill:var(--ink3);font-size:10.5px" }, "perfect calibration"));
+
+    const used = bins.filter(b => b.n > 0);
+    const nMax = Math.max.apply(null, used.map(b => b.n));
+    line(fr, used.map(b => [b.mean_pred, b.frac_pos]), C.acc, 2.2);
+
+    used.forEach(b => {
+      /* Area, not radius, proportional to n. */
+      const r = 3 + 9 * Math.sqrt(b.n / nMax);
+      const over = b.mean_pred > b.frac_pos;
+      /* Vertical drop to the diagonal makes the signed error readable. */
+      fr.g.appendChild(el("line", {
+        x1: fr.x(b.mean_pred), y1: fr.y(b.frac_pos),
+        x2: fr.x(b.mean_pred), y2: fr.y(b.mean_pred),
+        style: "stroke:" + (over ? C.bad : C.good) + ";stroke-width:1;opacity:.45"
+      }));
+      const c = el("circle", { cx: fr.x(b.mean_pred), cy: fr.y(b.frac_pos), r: r,
+        style: "fill:" + C.acc + ";opacity:.72;stroke:var(--bg2);stroke-width:1" });
+      c.appendChild(el("title", {}, "bin " + b.bin + " [" + b.lo.toFixed(1) + ", " +
+        b.hi.toFixed(1) + ")  \u00b7  n = " + int(b.n) + "  \u00b7  mean p\u0302 = " +
+        f3(b.mean_pred) + "  \u00b7  observed " + f3(b.frac_pos) +
+        "  \u00b7  error " + sg(b.mean_pred - b.frac_pos, 3)));
+      fr.g.appendChild(c);
+    });
+
+    hline(fr, DATA.calibration.prevalence, C.warn, "2 3", "base rate");
+    legend(fr, [{ c: C.bad, t: "over-confident (p\u0302 above observed)" },
+                { c: C.good, t: "under-confident" }], fr.ix[0] + 8, fr.iy[1] + 14);
+    drawInto("rel-chart", fr);
+
+    $("#rel-ece").textContent   = f4(row.ece);
+    $("#rel-brier").textContent = f4(row.brier);
+    $("#rel-auc").textContent   = f4(row.auc);
+    $("#rel-mp").textContent    = pct(row.mean_predicted, 2);
+
+    /* Weighted mean signed error, which is what makes the direction concrete. */
+    const N = sum(used.map(b => b.n));
+    const bias = sum(used.map(b => b.n * (b.mean_pred - b.frac_pos))) / N;
+    const raw = CAL[key.replace(/_(sigmoid|isotonic)$/, "_raw")];
+    let txt = REL_NAME[key] + ": ECE " + f4(row.ece) + " over 10 bins, mean predicted " +
+      pct(row.mean_predicted, 2) + " against a true base rate of " +
+      pct(DATA.calibration.prevalence, 2) + " \u2014 a population-weighted bias of " +
+      sg(bias, 4) + ". ";
+    if (/_raw$/.test(key) && key.indexOf("C_") === 0) {
+      txt += "This is the cost of reweighting: scale_pos_weight multiplies the positive " +
+        "gradient, so the fitted scores are no longer estimates of P(default). Ranking is " +
+        "preserved \u2014 ROC-AUC is " + f4(row.auc) + " \u2014 but every probability is inflated, " +
+        "and the cost analysis consumes probabilities, not ranks. ";
+    }
+    if (!/_raw$/.test(key) && raw) {
+      const d = row.ece - raw.ece;
+      txt += "Against the same arm's raw curve, ECE moves " + sg(d, 4) +
+        " and Brier " + sg(row.brier - raw.brier, 5) + ", while ROC-AUC moves " +
+        sg(row.auc - raw.auc, 5) + " \u2014 " +
+        (Math.abs(row.auc - raw.auc) < 0.002
+          ? "essentially unchanged, which is the expected result: both calibrators are monotone, and a monotone transform cannot reorder the scores ROC-AUC is computed from."
+          : "a change large enough to note, which for a monotone map means the tie structure changed.") + " ";
+    }
+    txt += "Point area is proportional to bin population: the top bins hold few clients, so " +
+      "their departure from the diagonal is mostly sampling noise and should not be read as " +
+      "miscalibration.";
+    $("#rel-note").textContent = txt;
+  }
+
+  seg("rel-seg", "data-k", draw);
+  REDRAW.push(() => { const b = $("#rel-seg button.on"); if (b) draw(b.getAttribute("data-k")); });
+}
+
+/* ===================================== 14. Elkan comparison (#el-*)
+   Empirical cost-optimal threshold against the analytic 1/(1+r). Agreement is
+   the calibration test: the analytic curve used no data, so a model whose
+   empirical optimum tracks it must be emitting something close to a real
+   probability. */
+const SCHEME_NAME = {
+  flat:          "flat cost per error, raw probabilities",
+  flat_isotonic: "flat cost per error, isotonic-calibrated",
+  instance:      "instance-weighted cost (LIMIT_BAL as an EAD proxy)"
+};
+
+function buildElkan() {
+  const RS = [1, 2, 5, 6, 10, 20];
+
+  function draw(scheme) {
+    const rows = RS.map(r => CST["r" + r + "_" + scheme]).filter(Boolean);
+    if (!rows.length) return;
+
+    /* r on a log axis, because the sweep is geometric. */
+    const lx = r => Math.log10(r);
+    const fr = frame({
+      w: 760, h: 330, pad: { l: 62, r: 20, t: 18, b: 44 },
+      xdom: [lx(0.85), lx(24)], ydom: [0, 0.62],
+      yticks: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6], yfmt: v => v.toFixed(2),
+      xticks: RS.map(r => ({ v: lx(r), label: "r = " + r })), xgrid: true,
+      ylabel: "cost-optimal threshold", xlabel: "cost ratio r = C_FN / C_FP  (log scale)"
+    });
+
+    /* The analytic curve, drawn densely so it reads as a curve, not a polygon. */
+    const an = [];
+    for (let i = 0; i <= 120; i++) {
+      const r = Math.pow(10, lx(0.85) + (lx(24) - lx(0.85)) * i / 120);
+      an.push([lx(r), 1 / (1 + r)]);
+    }
+    line(fr, an, C.warn, 1.8, "5 4");
+    fr.g.appendChild(el("text", { x: fr.x(lx(2.2)), y: fr.y(0.40),
+      style: "fill:" + C.warn + ";font-size:11px;font-family:var(--mono)" },
+      "Elkan (2001):  p* = 1/(1+r)"));
+
+    line(fr, rows.map(d => [lx(d.r), d.tau]), C.acc, 2.2);
+    rows.forEach(d => {
+      /* Connector to the analytic value: the gap is the quantity of interest. */
+      fr.g.appendChild(el("line", {
+        x1: fr.x(lx(d.r)), y1: fr.y(d.tau), x2: fr.x(lx(d.r)), y2: fr.y(d.p_star),
+        style: "stroke:" + (Math.abs(d.gap) > 0.05 ? C.bad : C.good) + ";stroke-width:1.6" }));
+      dot(fr, lx(d.r), d.p_star, C.warn, 3.4);
+      dot(fr, lx(d.r), d.tau, d.r === 6 ? C.good : C.acc, d.r === 6 ? 5.6 : 4,
+        "r = " + d.r + "  \u00b7  empirical \u03c4 = " + f4(d.tau) +
+        "  \u00b7  p* = " + f4(d.p_star) + "  \u00b7  gap " + sg(d.gap, 4) +
+        "  \u00b7  recall " + pct(d.recall, 1));
+    });
+    legend(fr, [{ c: C.acc, t: "empirical \u03c4 from out-of-fold predictions" },
+                { c: C.warn, t: "analytic p* = 1/(1+r)" }], fr.ix[0] + 8, fr.iy[1] + 14);
+    drawInto("el-chart", fr);
+
+    fillTable("el-tbl", rows.map(d => Object.assign({}, d, {
+      __cls: d.r === 6 ? "hi" : null
+    })), [
+      { k: "r", cls: "num" },
+      { k: "tau", cls: "num", fmt: v => f4(v) },
+      { k: "p_star", cls: "num muted", fmt: v => f4(v) },
+      { k: "gap", cls: v => "num " + (Math.abs(v) < 0.02 ? "good" : Math.abs(v) > 0.06 ? "bad" : ""),
+        fmt: v => sg(v, 4) },
+      { k: "min_cost", cls: "num", fmt: v => int(v) },
+      { k: "cost_at_half", cls: "num muted", fmt: v => int(v) },
+      { k: "saving", cls: "num good", fmt: (v, r2) => int(v) +
+        (r2.cost_at_half ? " (" + pct(v / r2.cost_at_half, 1) + ")" : "") },
+      { k: "recall", cls: "num", fmt: v => pct(v, 1) },
+      { k: "precision", cls: "num", fmt: v => pct(v, 1) }
+    ]);
+
+    const mae = mean(rows.map(d => Math.abs(d.gap)));
+    const r6 = CST["r6_" + scheme];
+    let txt = SCHEME_NAME[scheme] + ". Mean absolute gap between the empirical optimum and the " +
+      "analytic prediction across the six ratios is " + f4(mae) + ". ";
+    if (scheme === "instance") {
+      txt += "Here the comparison is deliberately expected to break down: Elkan's formula assumes " +
+        "a constant cost per error, and this scheme weights each error by the client's " +
+        "LIMIT_BAL, so there is no single scalar r for the formula to invert. A visible " +
+        "divergence is therefore a correct result, not a calibration failure \u2014 the " +
+        "per-client optimum is p* = 1/(1 + LGD\u00b7EAD / (NIM\u00b7EAD)) evaluated row by row. ";
+    } else {
+      txt += "The agreement is the argument: the analytic curve is derived from the cost matrix " +
+        "alone and saw no data at all, so a model whose empirical optimum tracks it must be " +
+        "emitting something close to a genuine probability. ";
+      if (scheme === "flat_isotonic") txt += "Note this series is tighter than the raw one \u2014 " +
+        "calibrating the probabilities moved the empirical optimum toward the analytic value, " +
+        "which is the causal direction the argument needs. ";
+    }
+    if (r6) txt += "At the headline r = 6 (from LGD \u2248 0.70 against NIM \u2248 0.12), \u03c4 = " +
+      f4(r6.tau) + " recovers " + pct(r6.recall, 1) + " of defaulters at " +
+      pct(r6.precision, 1) + " precision, for a saving of " + int(r6.saving) +
+      " cost units against operating at 0.5 \u2014 " +
+      (r6.cost_at_half ? pct(r6.saving / r6.cost_at_half, 1) : "?") + " of the cost " +
+      "an unthresholded model would incur.";
+    $("#el-note").textContent = txt;
+  }
+
+  seg("el-seg", "data-s", draw);
+  REDRAW.push(() => { const b = $("#el-seg button.on"); if (b) draw(b.getAttribute("data-s")); });
+}

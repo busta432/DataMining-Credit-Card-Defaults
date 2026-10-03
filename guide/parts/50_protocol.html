@@ -1,0 +1,348 @@
+<section id="s-protocol" data-title="Protocol &amp; leakage">
+<h2><span class="kicker">Section 5</span>The evaluation protocol, and the five ways it could have leaked</h2>
+
+<p class="lede">A leaked number is not a slightly optimistic number — it is a number with no
+meaning, because it answers a question nobody asked ("how well does the model do on data it has
+already seen?"). This section builds the splitting architecture from the ground up, identifies
+every point at which information could flow backwards from the test set, and shows the specific
+line of code that blocks each one.</p>
+
+<div class="box key">
+  <div class="bt">The invariant the whole architecture exists to protect</div>
+  <p style="margin-bottom:0">Every quantity used to <em>make a choice</em> — a hyperparameter, a
+  feature set, a threshold, a calibration map, a stopping iteration — must be computed from data
+  the final evaluation never sees. There are no exceptions and no "it only looked at it a
+  little". A choice informed by the test set converts the test set into training data, silently
+  and irreversibly.</p>
+</div>
+
+<h3>5.1 Step zero: de-duplication happens <em>before</em> splitting</h3>
+
+<p>The Phase 1 cleaning pass removed duplicate feature-rows, taking 30,000 rows to
+<span data-v="n-clean"></span>. The <em>ordering</em> matters more than the count.</p>
+
+<p>If two clients have byte-identical features and you split afterwards, one copy can land in
+train and the other in test. The model then "predicts" a row it has memorised, at zero
+generalisation. The inflation is not hypothetical: duplicates are not uniformly distributed —
+they concentrate among dormant accounts with all-zero bills, which are also the easiest rows to
+classify. Splitting after de-duplication makes train/test membership independent of the
+duplication structure.</p>
+
+<p>Say this explicitly in the report. Markers look for it, and it is one sentence.</p>
+
+<h3>5.2 The hold-out, and how much it can actually resolve</h3>
+
+<div class="codehdr">src/data.py — <span class="fn">make_splits()</span></div>
+<pre><code>train_idx, test_idx = <span class="f">train_test_split</span>(
+    idx, test_size=TEST_SIZE, stratify=y, random_state=SEED   <span class="c"># 0.20, 42</span>
+)
+train_idx = np.<span class="f">sort</span>(train_idx)   <span class="c"># sorted so .iloc slices are deterministic</span>
+test_idx  = np.<span class="f">sort</span>(test_idx)
+</code></pre>
+
+<p>Three things are deliberate in those four lines:</p>
+
+<dl class="vardef">
+<dt>stratify=y</dt><dd>without it the test default rate would wander by a percentage point or so
+  across seeds, and every prevalence-sensitive metric (PR-AUC, precision, cost) would move with
+  it. Stratification holds the rate to within 0.1% in every fold — an assertion in
+  <code>verify.py</code>, not an assumption</dd>
+<dt>test_size=0.20</dt><dd>gives <span data-v="n-train"></span> train /
+  <span data-v="n-test"></span> test, with <span data-v="n-test-pos"></span> test positives</dd>
+<dt>random_state=SEED</dt><dd>the indices are cached to <code>artifacts/splits.npz</code> and read
+  by all fourteen experiments, so no experiment can silently reshuffle. Re-running
+  <code>make_splits()</code> reproduces identical arrays</dd>
+</dl>
+
+<div class="box deriv">
+  <div class="bt">Why 20% is enough — the resolution calculation</div>
+  <p>The choice of test size is a bias–variance trade in disguise: more test data means a tighter
+  estimate but a smaller training set. The right question is <em>what difference do I need to be
+  able to see?</em> Hanley &amp; McNeil (1982) give the standard error of an AUC estimate as</p>
+  <div class="eq">SE(A) = √[ ( A(1−A) + (P−1)(Q₁ − A²) + (N−1)(Q₂ − A²) ) / (P·N) ]<span class="n">(14)</span></div>
+  <div class="eq left" style="font-size:14.5px">with&nbsp; Q₁ = A/(2 − A),&nbsp;&nbsp;
+  Q₂ = 2A²/(1 + A)</div>
+  <p>Substituting A ≈ 0.78, P = <span data-v="n-test-pos"></span> positives and
+  N = <span data-v="n-test-neg"></span> negatives gives <strong>SE ≈ 0.008</strong>. The
+  differences the project needs to resolve on the test set are the ladder gaps — rung 1 to rung 6
+  is <strong>0.140</strong> AUC, roughly <em>seventeen</em> standard errors. Comfortably
+  resolvable.</p>
+  <p style="margin-bottom:0">For the comparisons that matter, DeLong's paired estimator does
+  better still, because the two ROC curves are computed on the <em>same</em> clients and their
+  errors are positively correlated — the shared noise cancels. The reported paired SEs are
+  <strong>0.0040–0.0067</strong>, tighter than the 0.008 unpaired figure. That correlation is
+  precisely why a paired test is the correct instrument here.</p>
+</div>
+
+<h3>5.3 Three fold structures, three seeds, three jobs</h3>
+
+<p>The project uses <em>three distinct</em> partitions and keeps them deliberately separate. This
+is the part most easily collapsed into one CV loop — and collapsing it is what makes reported
+variance understate the truth.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Partition</th><th>Object</th><th class="num">seed</th><th>Job</th><th>Why separate</th></tr></thead>
+<tbody>
+<tr><td>Hold-out</td><td><code>train_test_split</code></td><td class="num">42</td>
+    <td>final, once-only evaluation</td><td>the only unbiased estimate in the project</td></tr>
+<tr><td>Selection folds</td><td><code>StratifiedKFold(5)</code></td><td class="num">42</td>
+    <td>Optuna objective, OOF threshold, feature choices</td>
+    <td>all <em>choices</em> are made here, on training data only</td></tr>
+<tr class="hi"><td>Variance folds</td><td><code>RepeatedStratifiedKFold(5, 5)</code></td>
+    <td class="num">7</td><td>reported mean ± SD over 25 fits</td>
+    <td><strong>distinct seed</strong> — see the box below</td></tr>
+</tbody></table></div>
+
+<div class="box why">
+  <div class="bt">Why the variance folds use seed 7 and not 42</div>
+  <p>Hyperparameters were selected to maximise performance <em>on the seed-42 partition</em>. Any
+  configuration that happens to suit that particular partition will score above its true
+  expectation when re-measured on it. Reusing seed 42 for variance reporting would therefore
+  report the spread <em>of a quantity that was optimised against those exact folds</em> —
+  optimistic in the mean and too tight in the SD.</p>
+  <p style="margin-bottom:0">Seed 7 generates five fresh 5-fold partitions. The reported
+  SD then genuinely answers <em>"how much does this number move if I re-partition the training
+  data?"</em>. The cost is a small downward shift in the reported mean relative to the tuner's
+  best trial — which is the honest direction to be wrong in, and is itself worth one sentence in
+  the report.</p>
+</div>
+
+<h3>5.4 The nested problem: early stopping needs a validation set it must not have</h3>
+
+<p>XGBoost's early stopping monitors a held-out set and halts when it stops improving. That makes
+the tree count <em>data-dependent</em> — and therefore a <strong>fitted choice</strong>, subject
+to exactly the same discipline as a hyperparameter. Point <code>eval_set</code> at the CV
+validation fold and the fold is no longer out-of-sample; point it at the test set and the whole
+evaluation is void.</p>
+
+<p>The fix is a <em>third</em> level: carve a 15% stratified slice out of <em>each fold's own
+training rows</em>, exclusive to that fold.</p>
+
+<div class="widget">
+  <div class="wt">Interactive · the three-level split</div>
+  <p class="wd">Drag through the five selection folds. Every band is drawn to real scale from
+  <code>artifacts/splits.npz</code> proportions. Note that the orange early-stopping slice always
+  sits <em>inside</em> the blue training block, never touching green or grey.</p>
+  <div class="ctrl"><label>selection fold</label>
+    <input type="range" id="cv-fold" min="0" max="4" step="1" value="0">
+    <span class="val" id="cv-fold-v"></span></div>
+  <svg class="chart" id="cv-diag" viewBox="0 0 760 210" role="img"
+       aria-label="Diagram of the three-level nested split"></svg>
+  <div class="readout">
+    <div class="ro"><div class="l">Fold train rows</div><div class="v" id="cv-tr"></div></div>
+    <div class="ro"><div class="l">ES slice (15%)</div><div class="v" id="cv-es"></div></div>
+    <div class="ro"><div class="l">Fold validation</div><div class="v" id="cv-va"></div></div>
+    <div class="ro"><div class="l">Test (untouched)</div><div class="v" id="cv-te"></div></div>
+  </div>
+  <p class="small muted" id="cv-note" style="margin:11px 0 0"></p>
+</div>
+
+<div class="codehdr">src/runner.py — <span class="fn">fit_one()</span>, where the slice is carved</div>
+<pre><code><span class="k">def</span> <span class="f">fit_one</span>(est, X_tr, y_tr, seed=SEED):
+    <span class="s">"""Fit a single estimator, carving the early-stopping slice out of the
+    training data. The eval_set comes from an inner slice of this fold's *training*
+    rows, so the outer validation fold is never seen by early stopping and the
+    test set never at all."""</span>
+    <span class="k">if</span> <span class="f">_uses_early_stopping</span>(est):
+        i_fit, i_es = <span class="f">train_test_split</span>(
+            np.<span class="f">arange</span>(<span class="f">len</span>(y_tr)), test_size=ES_SLICE,   <span class="c"># 0.15</span>
+            stratify=y_tr, random_state=seed,
+        )
+        est.<span class="f">fit</span>(X_tr.iloc[i_fit], y_tr[i_fit],
+                eval_set=[(X_tr.iloc[i_es], y_tr[i_es])], verbose=<span class="k">False</span>)
+    <span class="k">else</span>:
+        est.<span class="f">fit</span>(X_tr, y_tr)
+    <span class="k">return</span> est
+</code></pre>
+
+<div class="box mark">
+  <div class="bt">What this costs, and why it is worth it</div>
+  <p>Each fold now fits on 0.8 × 0.85 = <strong>68%</strong> of the training data rather than 80%.
+  Learning-curve evidence (§10) shows ROC-AUC has essentially plateaued by half the data, so the
+  12 pp sacrifice costs almost nothing measurable — while the alternative costs the validity of
+  every number downstream.</p>
+  <p style="margin-bottom:0">Note also <code>_uses_early_stopping(est)</code>: the branch is
+  <em>conditional</em>. Logistic regression, the decision tree and the random forest have no
+  <code>eval_set</code> concept, so they are fitted on the full fold. If the slice were carved
+  unconditionally, the ladder's lower rungs would be handicapped by 15% of their data and the
+  comparison that answers research question 1 would be unfair in XGBoost's favour.</p>
+</div>
+
+<h3>5.5 Freezing the threshold — the leakage point that looks innocent</h3>
+
+<p>§4.3 established that the threshold is a separate decision. It is also a <em>fitted</em>
+decision, and therefore the most tempting place to leak, because the leak produces a beautiful
+number and no error message.</p>
+
+<div class="box trap">
+  <div class="bt">The fatal version, and why it is so seductive</div>
+  <pre style="margin:12px 0 0"><code><span class="c"># WRONG -- this is the single most common fatal flaw in this assignment</span>
+best = <span class="f">min</span>(grid, key=<span class="k">lambda</span> t: <span class="f">cost</span>(y_test, p_test, t))
+<span class="f">report</span>(<span class="f">cost</span>(y_test, p_test, best))</code></pre>
+  <p style="margin-top:12px">The threshold was chosen <em>using the test labels</em>, then scored
+  against the same labels. You have reported the minimum of 51 draws rather than the value of a
+  decision rule, so the figure is biased downward by construction and cannot be reproduced on new
+  clients — the optimum will have moved. It looks innocent because no model was refitted; a
+  single scalar was selected. One scalar is enough.</p>
+</div>
+
+<div class="codehdr">src/costs.py — <span class="fn">pick_threshold_oof()</span>, the correct version</div>
+<pre><code><span class="k">def</span> <span class="f">pick_threshold_oof</span>(y_oof, proba_oof, r=R_HEADLINE, ead=<span class="k">None</span>, grid=<span class="k">None</span>):
+    <span class="s">"""Choose the cost-minimising threshold on out-of-fold TRAINING predictions.
+
+    The returned scalar is frozen and applied unchanged to the test set."""</span>
+    grid  = <span class="f">threshold_grid</span>() <span class="k">if</span> grid <span class="k">is</span> <span class="k">None</span> <span class="k">else</span> np.<span class="f">asarray</span>(grid, dtype=<span class="k">float</span>)
+    costs = np.<span class="f">array</span>([<span class="f">cost_at_threshold</span>(y_oof, proba_oof, t, r=r, ead=ead)
+                      <span class="k">for</span> t <span class="k">in</span> grid])
+    tau   = <span class="k">float</span>(grid[<span class="k">int</span>(np.<span class="f">argmin</span>(costs))])
+    <span class="k">return</span> tau, {<span class="s">"grid"</span>: grid.<span class="f">tolist</span>(), <span class="s">"cost"</span>: costs.<span class="f">tolist</span>(), <span class="s">"tau"</span>: tau}
+</code></pre>
+
+<p>Two details make this safe. <code>proba_oof</code> is assembled fold-by-fold inside
+<code>cv_evaluate()</code> — each client's probability comes from a model that never saw that
+client, so the sweep is genuinely out-of-sample <em>within the training portion</em>. And
+<code>tau</code> is returned as a <strong>Python float</strong>, which <code>verify.py</code>
+asserts is a scalar in (0, 1). A frozen scalar cannot accidentally be re-optimised later; an
+array could.</p>
+
+<p>The threshold is then applied as an explicit comparison, never via <code>.predict()</code>:</p>
+
+<pre><code><span class="c"># .predict() silently uses 0.5 -- it would quietly discard the whole cost analysis</span>
+y_hat = (model.<span class="f">predict_proba</span>(X_test)[:, <span class="d">1</span>] &gt;= tau).<span class="f">astype</span>(<span class="k">int</span>)
+</code></pre>
+
+<h3>5.6 Who is licensed to touch the test set</h3>
+
+<p>The test set is read <strong>once</strong>, by <strong>one experiment</strong>.
+<code>exp01</code> through <code>exp13</code> report CV metrics only and leave their
+<code>test</code> block explicitly <code>null</code> — not omitted and not zero, so the absence is
+visible in the JSON rather than inferable. <code>exp14_final</code> is the single gate; the SHAP
+experiments read test-set rows to <em>explain</em> held-out decisions but select nothing from
+them.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Experiment</th><th>Reads test?</th><th>Selects anything from it?</th><th>Rationale</th></tr></thead>
+<tbody>
+<tr><td><code>exp01</code>–<code>exp08</code></td><td>no</td><td>no</td>
+    <td>ladder, tuning, ablations — all CV-only</td></tr>
+<tr><td><code>exp09</code>, <code>exp10</code></td><td>no</td><td>no</td>
+    <td>calibration and threshold choice run on OOF training predictions</td></tr>
+<tr><td><code>exp11</code>, <code>exp12</code></td><td><strong>yes</strong></td><td>no</td>
+    <td>SHAP explains held-out decisions; that <em>is</em> the auditability argument</td></tr>
+<tr><td><code>exp13</code></td><td><strong>yes</strong></td><td>no</td>
+    <td>fairness is measured at the <em>already frozen</em> threshold</td></tr>
+<tr class="hi"><td><code>exp14_final</code></td><td><strong>yes</strong></td><td>no</td>
+    <td>the single evaluation gate: frozen configs, frozen τ, DeLong</td></tr>
+</tbody></table></div>
+
+<p>Note the third column is <code>no</code> in <em>every</em> row. That is the actual invariant —
+reading the test set to measure is fine; reading it to <em>decide</em> is not.</p>
+
+<h3>5.7 Auditing it mechanically rather than trusting it</h3>
+
+<p>Discipline that depends on remembering is discipline that fails on a deadline, so the
+constraint is checked by a script. <code>experiments/verify.py</code> re-derives the splits and
+asserts the structural properties; a <code>grep</code> over <code>experiments/</code> confirms
+that <code>X_test</code> and <code>y_test</code> appear only in the licensed files.</p>
+
+<pre><code><span class="c"># structural assertions, all currently passing (10 passed, 0 failed)</span>
+<span class="k">assert</span> <span class="f">len</span>(np.<span class="f">intersect1d</span>(train_idx, test_idx)) == <span class="d">0</span>        <span class="c"># zero overlap</span>
+<span class="k">assert</span> <span class="f">abs</span>(y[train_idx].<span class="f">mean</span>() - y[test_idx].<span class="f">mean</span>()) &lt; <span class="d">1e-3</span>  <span class="c"># stratified</span>
+<span class="k">assert</span> <span class="f">isinstance</span>(tau, <span class="k">float</span>) <span class="k">and</span> <span class="d">0</span> &lt; tau &lt; <span class="d">1</span>              <span class="c"># frozen scalar</span>
+<span class="k">assert</span> <span class="f">abs</span>(shap_values.<span class="f">sum</span>(axis=<span class="d">1</span>) + base - margin).<span class="f">max</span>() &lt; <span class="d">1e-6</span>
+</code></pre>
+
+<div class="widget">
+  <div class="wt">Interactive · spot the leak</div>
+  <p class="wd">Six scenarios. Decide before revealing — if any of these feel fine, that is the
+  one worth reading twice. The last two are the subtle ones.</p>
+  <div id="leakquiz">
+    <div class="lq" data-ans="leak">
+      <p class="s">A <code>StandardScaler</code> is fitted on the full dataset, then the data is
+      split 80/20.</p>
+      <div class="x"><strong>Leak.</strong> The scaler's mean and variance were computed from test
+      rows, so every training feature carries a trace of the test distribution. The fix is a
+      <code>Pipeline</code> so the scaler is fitted per fold. <em>Note for this project:</em> the
+      point is moot in practice, because §3 shows trees are invariant to monotone transforms and
+      nothing here is scaled — but it is the canonical example and worth recognising.</div>
+    </div>
+    <div class="lq" data-ans="leak">
+      <p class="s">SMOTE is applied to the whole training set, and 5-fold CV is run on the
+      oversampled result.</p>
+      <div class="x"><strong>Leak.</strong> Synthetic rows are interpolated between real rows, so a
+      synthetic point derived from a row in fold 3 can land in folds 1, 2, 4 and 5. The model then
+      trains on near-copies of its validation data and CV scores inflate sharply. SMOTE must sit
+      <em>inside</em> an <code>imblearn.Pipeline</code> so it is applied per fold, to the training
+      half only — which is exactly how arm D of §8 is built.</div>
+    </div>
+    <div class="lq" data-ans="leak">
+      <p class="s">Early stopping uses <code>eval_set=[(X_test, y_test)]</code> "just to pick the
+      number of trees".</p>
+      <div class="x"><strong>Leak.</strong> The tree count is a fitted parameter, and it was fitted
+      on test labels. The model is now explicitly selected to stop at its best test performance.
+      "Just" one integer is still a choice made from the test set.</div>
+    </div>
+    <div class="lq" data-ans="fine">
+      <p class="s">SHAP values are computed on the test set after the model is finalised, and the
+      resulting beeswarm appears in the report.</p>
+      <div class="x"><strong>Fine.</strong> Nothing is selected — no refit, no re-threshold, no
+      feature dropped on the basis of the plot. Explaining held-out decisions is the whole point
+      of the auditability argument, and explaining decisions the model got right on data it
+      memorised would prove nothing. The discipline is that you may not then <em>act</em> on it
+      by dropping a feature and re-reporting.</div>
+    </div>
+    <div class="lq" data-ans="leak">
+      <p class="s">Three model families are each evaluated on the test set, and the best is
+      reported as the final model.</p>
+      <div class="x"><strong>Leak</strong> — and the subtlest kind, because every individual
+      evaluation was clean. Selecting the maximum of three test scores reports an order statistic,
+      not an expectation: the winner's score includes whatever test-set noise favoured it. With
+      SE ≈ 0.008 the expected optimism of a best-of-three is on the order of a standard error.
+      Model selection belongs entirely in CV; the test set evaluates the <em>already chosen</em>
+      configuration. This is why §5.6's third column is <code>no</code> in every row.</div>
+    </div>
+    <div class="lq" data-ans="leak">
+      <p class="s">The cost-optimal threshold is chosen on out-of-fold predictions — but the
+      out-of-fold predictions come from the <em>tuned</em> model, whose hyperparameters were
+      selected on those same folds.</p>
+      <div class="x"><strong>Leak, mild but real — and the project accepts it knowingly.</strong>
+      The OOF probabilities are not fully out-of-sample with respect to <em>hyperparameter</em>
+      selection, so the frozen τ is slightly optimistic. Removing it properly needs nested CV
+      (tune inside each outer fold), which multiplies runtime by the fold count. The project's
+      position: the bias is second-order because §7 shows the tuning surface is nearly flat
+      (0.776–0.785 across 142 completed trials), τ is a one-dimensional choice on a 51-point grid
+      rather than a nine-dimensional one, and §9 shows the chosen τ lands within 0.009 of Elkan's
+      <em>analytic</em> optimum — a value that used no data at all. Naming a residual bias and
+      bounding it is a stronger report than claiming none exists.</div>
+    </div>
+  </div>
+  <p class="small muted" style="margin:13px 0 0">Score: <span id="lq-score">0 / 6 revealed</span></p>
+</div>
+
+<details class="q"><summary>Self-check: why does the project not use nested cross-validation throughout?</summary>
+<div class="dbody">
+<p>Cost against benefit. Nested CV re-runs the full Optuna study inside every outer fold, so at
+five outer folds the tuning budget multiplies by five — turning a ~40-minute study into roughly
+three hours, with the whole grid of fourteen experiments downstream of it.</p>
+<p>The benefit it buys is removing the selection bias described in the sixth quiz item. The
+project instead <em>bounds</em> that bias with three pieces of evidence: the tuning gain over
+library defaults is small (<span data-v="tuning-gain"></span> ROC-AUC) so there was little to
+overfit to; the objective surface is nearly flat across trials; and the frozen threshold agrees
+with an analytic formula that consumed no data. Where honesty required a true hold-out — the final
+headline numbers and the DeLong comparison — a genuine untouched test set is used instead, which
+is the stronger guarantee for the claims that actually matter.</p>
+</div></details>
+
+<details class="q"><summary>Self-check: the CV mean is 0.7845 and the test ROC-AUC is 0.7829. Is that a problem?</summary>
+<div class="dbody">
+<p>No — it is the expected and reassuring direction. The gap is 0.0016, roughly a fifth of one
+fold-SD (<span data-v="rung6-sd"></span>) and a fifth of the test SE (≈0.008), so the two are
+statistically indistinguishable.</p>
+<p>A <em>small negative</em> gap is what a clean protocol looks like: the CV mean is very slightly
+optimistic because the configuration was selected to do well in CV. What would be alarming is the
+opposite — a test score meaningfully <em>above</em> CV, which usually means the folds were
+handicapped relative to the final fit, or a large <em>positive</em> gap, which means overfitting
+to the selection folds. Neither is present.</p>
+</div></details>
+
+</section>

@@ -1,0 +1,258 @@
+<section id="s-data" data-title="The data, from first principles">
+<h2><span class="kicker">Section 2</span>The data, from first principles</h2>
+
+<p class="lede">You cannot justify a modelling choice without knowing what the columns mean. Most
+of the defensible decisions in this project come directly from three quirks of this particular
+dataset — so this section comes before any mathematics.</p>
+
+<h3>2.1 Provenance and shape</h3>
+
+<p>The dataset is <strong>Default of Credit Card Clients</strong> (Yeh &amp; Lien, 2009), UCI
+repository id <strong>350</strong>. It records 30,000 Taiwanese credit-card accounts observed
+over six months (April–September 2005), and asks whether each client defaulted in October.</p>
+
+<p>It is fetched at runtime rather than committed:</p>
+
+<div class="codehdr"><span class="tag">src/data.py</span><span class="fn">load_raw()</span></div>
+<pre><code><span class="k">from</span> ucimlrepo <span class="k">import</span> fetch_ucirepo
+repo = <span class="f">fetch_ucirepo</span>(id=<span class="n">350</span>)
+<span class="c"># The UCI copy ships opaque names (X1, X2 …) with the real names in the</span>
+<span class="c"># variable metadata, so the rename is programmatic rather than hand-typed.</span>
+name_map = {r[<span class="s">"name"</span>]: r[<span class="s">"description"</span>] <span class="k">for</span> _, r <span class="k">in</span> repo.variables.<span class="f">iterrows</span>()
+            <span class="k">if</span> <span class="f">isinstance</span>(r.<span class="f">get</span>(<span class="s">"description"</span>), <span class="f">str</span>) <span class="k">and</span> r[<span class="s">"description"</span>].<span class="f">strip</span>()}
+</code></pre>
+
+<h3>2.2 The 24 columns</h3>
+
+<div class="tw"><table>
+<thead><tr><th>Group</th><th>Columns</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>limit</code></td><td><code>LIMIT_BAL</code></td><td>Credit limit, NT$. The exposure measure.</td></tr>
+<tr><td><code>demographic</code></td><td><code>SEX</code>, <code>EDUCATION</code>, <code>MARRIAGE</code>, <code>AGE</code></td><td>Protected or quasi-protected attributes. Drive the fairness study.</td></tr>
+<tr class="hi"><td><code>pay_status</code></td><td><code>PAY_0</code>, <code>PAY_2</code>…<code>PAY_6</code></td><td><strong>Repayment status code</strong> per month. The dominant signal.</td></tr>
+<tr><td><code>bill</code></td><td><code>BILL_AMT1</code>…<code>6</code></td><td>Statement balance per month. Heavily collinear.</td></tr>
+<tr><td><code>pay_amt</code></td><td><code>PAY_AMT1</code>…<code>6</code></td><td>Amount actually paid per month.</td></tr>
+<tr><td>target</td><td><code>DEFAULT</code></td><td>1 = defaulted next month. <strong>Confirm this polarity</strong> — <code>scale_pos_weight</code> depends on it.</td></tr>
+</tbody></table></div>
+
+<div class="box trap">
+  <div class="bt">Naming trap: there is no PAY_1</div>
+  <p>The most recent month is <code>PAY_0</code>, not <code>PAY_1</code>. But the most recent
+  bill is <code>BILL_AMT1</code> and the most recent payment is <code>PAY_AMT1</code>. So the
+  index direction is <em>inconsistent between column families</em>, and the chronological order
+  has to be written out explicitly rather than inferred from the suffix:</p>
+<pre style="margin-bottom:0"><code>PAY_COLS   = [<span class="s">"PAY_0"</span>, <span class="s">"PAY_2"</span>, <span class="s">"PAY_3"</span>, <span class="s">"PAY_4"</span>, <span class="s">"PAY_5"</span>, <span class="s">"PAY_6"</span>]
+PAY_CHRONO = [<span class="s">"PAY_6"</span>, <span class="s">"PAY_5"</span>, <span class="s">"PAY_4"</span>, <span class="s">"PAY_3"</span>, <span class="s">"PAY_2"</span>, <span class="s">"PAY_0"</span>]  <span class="c"># Apr -> Sep</span>
+BILL_CHRONO = BILL_COLS[::-<span class="n">1</span>]</code></pre>
+  <p class="small" style="margin-top:10px">Getting this backwards silently inverts
+  <code>DELINQ_TREND</code> and the recency ablation. It is the kind of bug no test catches
+  unless you assert the direction.</p>
+</div>
+
+<h3>2.3 The <code>PAY_n</code> encoding is the crux of the whole project</h3>
+
+<p>The documented codes are <strong>−2 = no credit use, −1 = paid in full, 0 = revolving credit
+(paid the minimum), 1 = one month late, 2 = two months late, …, 8 = eight months late</strong>.</p>
+
+<p>Read that again as a <em>number line</em>. It is an integer column, so any model will treat
+−2 &lt; −1 &lt; 0 &lt; 1 &lt; 2 as ordered and expect default risk to increase along it. But the
+observed default rate does <strong>not</strong> increase monotonically:</p>
+
+<div class="widget">
+  <div class="wt">Interactive · the non-monotonicity</div>
+  <p class="wd">Observed default rate by <code>PAY_0</code> code in the held-out sample, from
+  <code>results/exp11_shap.json</code>. Hover a bar. Note the <em>dip</em> at code 0.</p>
+  <div id="payprofile"></div>
+  <div class="box" style="margin:14px 0 0">
+    <p style="margin:0" class="small">A client on <strong>revolving credit (0)</strong> is
+    <em>safer</em> than one who <strong>paid in full (−1)</strong> in this sample. That is
+    economically sensible — revolving borrowers are engaged, profitable, and screened; clients
+    who clear the balance may be transactors with thin behavioural history — but it is
+    <strong>not</strong> a monotone function of the code.</p>
+  </div>
+</div>
+
+<div class="box key">
+  <div class="bt">Three design consequences, all traceable to this one fact</div>
+  <ol>
+  <li><strong>Prefer a non-linear learner.</strong> Logistic regression fits one coefficient per
+  column, i.e. a monotone effect. It <em>cannot</em> represent a dip at 0. That is a structural
+  limitation, not a tuning failure — and it is why the ladder's linear rung underperforms.</li>
+  <li><strong>Keep the native integers; don't one-hot.</strong> A tree makes axis-aligned splits,
+  so a non-monotone response is recoverable by <em>stacking</em> splits
+  (<code>PAY_0 &lt; 0.5</code>, then <code>PAY_0 &lt; −1.5</code>). That costs tree
+  <em>depth</em>, not expressible functions. Verified empirically in §10.</li>
+  <li><strong>Expect SHAP to rediscover the dip.</strong> If the model has genuinely learned the
+  shape, the attribution for code 0 should be the <em>most negative</em> of all codes. It is
+  (§11) — which is convergent validation of the EDA from the model's internals.</li>
+  </ol>
+</div>
+
+<h3>2.4 Cleaning: 30,000 → 29,944</h3>
+
+<p>Two problems, each with a documented rule. Both are ported from Phase 1 with their assertions
+intact, so Phase 2 provably operates on the same frame the proposal described.</p>
+
+<div class="flow">
+  <div class="step"><div class="i">1</div><div class="t">
+    <b>Undocumented category codes</b>
+    <code>EDUCATION</code> contains 0, 5 and 6 — none of which appear in the data dictionary.
+    <code>MARRIAGE</code> contains 0. These are folded into the documented "others" bucket
+    (<code>EDUCATION → 4</code>, <code>MARRIAGE → 3</code>) rather than dropped, because the rows
+    are otherwise complete and discarding them would bias the demographic mix.
+  </div></div>
+  <div class="step"><div class="i">2</div><div class="t">
+    <b>Duplicate feature-rows</b>
+    108 rows sit in 52 groups with identical features. 21 of those groups carry
+    <em>contradictory</em> labels — same inputs, different outcome. De-duplication removes 56
+    rows, giving <strong>29,944 rows and 6,622 defaults</strong>.
+  </div></div>
+</div>
+
+<div class="box why">
+  <div class="bt">Why de-duplication must precede splitting</div>
+  <p>If two identical feature-rows land one in train and one in test, the model has effectively
+  memorised a test row. Every score inflates, and nothing in the output looks wrong. Doing the
+  de-duplication first makes that impossible — and stating so explicitly is something markers
+  look for.</p>
+</div>
+
+<p>Four assertions pin the result, so the pipeline fails loudly if the upstream data or the
+cleaning logic ever changes:</p>
+
+<pre><code><span class="k">assert</span> <span class="f">len</span>(df) == <span class="n">29944</span>
+<span class="k">assert</span> <span class="f">int</span>(df[TARGET].<span class="f">sum</span>()) == <span class="n">6622</span>
+<span class="k">assert</span> <span class="f">set</span>(df[<span class="s">"EDUCATION"</span>].<span class="f">unique</span>()) &lt;= {<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>, <span class="n">4</span>}
+<span class="k">assert</span> <span class="f">set</span>(df[<span class="s">"MARRIAGE"</span>].<span class="f">unique</span>()) &lt;= {<span class="n">1</span>, <span class="n">2</span>, <span class="n">3</span>}
+</code></pre>
+
+<h3>2.5 Class imbalance: 22% prevalence</h3>
+
+<p>After cleaning, 6,622 of 29,944 clients default — a prevalence of
+<strong><span data-v="prevalence-pct"></span>%</strong>. The negative-to-positive ratio is
+<strong><span data-v="spw"></span></strong>, which is the value <code>scale_pos_weight</code>
+would take.</p>
+
+<div class="box trap">
+  <div class="bt">The accuracy trap, in one number</div>
+  <p>A model that predicts "nobody defaults" is
+  <strong><span data-v="majority-acc"></span>% accurate</strong> and catches
+  <strong>zero</strong> defaults. Any metric that rewards this is the wrong metric, which is why
+  accuracy is reported in the ladder table only to <em>kill</em> it, and never optimised. §4
+  derives what to use instead.</p>
+</div>
+
+<p>At 3.5:1 this is <em>mild</em> imbalance. That matters: much of the folklore around
+resampling and reweighting addresses 100:1 or 1000:1 problems. Applying those remedies here
+turns out to cost more than it buys (§8) — and <code>max_delta_step</code>, which exists
+specifically for extreme imbalance, is unnecessary at this ratio.</p>
+
+<h3>2.6 Three more quirks you need to be able to name</h3>
+
+<div class="tw"><table>
+<thead><tr><th>Quirk</th><th>Evidence</th><th>Design consequence</th></tr></thead>
+<tbody>
+<tr><td><strong>Negative bills</strong></td><td>1,930 rows carry a negative <code>BILL_AMT</code> (credit balances / refunds)</td><td><code>PAY_RATIO_n</code> is undefined there → <code>NaN</code>, never a sentinel fill (§3.5)</td></tr>
+<tr><td><strong><code>BILL_AMT</code> collinearity</strong></td><td>VIF 13.9–25.7 across the six columns</td><td>Keep them — collinearity degrades <em>attribution</em>, not prediction. But read SHAP for the block, not per column (§11)</td></tr>
+<tr class="hi"><td><strong><code>PAY_0</code> construction anomaly</strong></td><td>Repayment code <code>1</code> occurs 0, 0, 2, 4, 28 times Apr–Aug, then <strong>3,688</strong> times in September</td><td><code>PAY_0</code> looks <em>constructed differently</em> from the five historical columns — and it is the most predictive feature. Forces the ablation in §14</td></tr>
+</tbody></table></div>
+
+<div class="box mark">
+  <div class="bt">Why the PAY_0 anomaly is an asset, not a liability</div>
+  <p>Finding that your strongest predictor has a documented irregularity, measuring the cost of
+  removing it, and reporting that honestly is exactly what the Summary section (15 marks)
+  rewards. Hiding it would be worse than not finding it. §14 quantifies it: dropping
+  <code>PAY_0</code> costs <strong><span data-v="pay0-cv-drop"></span></strong> CV ROC-AUC,
+  and the model still reaches <strong><span data-v="nopay0-test"></span></strong> on the
+  hold-out — so the headline is not an artefact of the anomaly.</p>
+</div>
+
+<h3>2.7 Feature engineering: 17 derived columns</h3>
+
+<p>Phase 1 promised to <em>benchmark</em> aggregate features rather than assume they help, so
+<code>engineer()</code> builds 17 and §10 tests them.</p>
+
+<div class="tw"><table>
+<thead><tr><th>Feature</th><th class="num">n</th><th>Definition</th><th>Rationale</th></tr></thead>
+<tbody>
+<tr><td><code>UTIL_n</code></td><td class="num">6</td><td><code>BILL_AMTn / LIMIT_BAL</code></td><td>Normalises exposure by limit</td></tr>
+<tr><td><code>PAY_RATIO_n</code></td><td class="num">6</td><td><code>PAY_AMTn / BILL_AMTn</code>, guarded</td><td>Repayment intensity</td></tr>
+<tr><td><code>N_DELINQ</code></td><td class="num">1</td><td>count of <code>PAY_n &gt;= 1</code></td><td>Aggregate delinquency burden</td></tr>
+<tr><td><code>MAX_DELINQ</code></td><td class="num">1</td><td><code>max(PAY_n)</code></td><td>Worst observed state</td></tr>
+<tr><td><code>DELINQ_TREND</code></td><td class="num">1</td><td>OLS slope of <code>PAY_n</code> over months</td><td>Is the client deteriorating?</td></tr>
+<tr><td><code>BILL_TREND</code></td><td class="num">1</td><td>OLS slope of <code>BILL_AMTn</code></td><td>Exposure trajectory</td></tr>
+<tr><td><code>MONTHS_DORMANT</code></td><td class="num">1</td><td>count of <code>PAY_n == -2</code></td><td>Dormancy</td></tr>
+</tbody></table></div>
+
+<h4>The trend features: why the slope is one dot product</h4>
+
+<p>The six months are evenly spaced, so the OLS slope denominator is a <em>constant</em> and the
+whole regression collapses to a dot product. This is worth understanding because it is a nice
+example of exploiting structure instead of calling a library in a loop:</p>
+
+<div class="eq left">slope = Σᵢ (xᵢ − x̄)(yᵢ − ȳ) / Σᵢ (xᵢ − x̄)²</div>
+
+<p>With <code>x = [0,1,2,3,4,5]</code>, the denominator Σ(xᵢ − x̄)² is always
+<strong>17.5</strong>. And because Σ(xᵢ − x̄) = 0, the ȳ term in the numerator cancels. So:</p>
+
+<div class="codehdr"><span class="tag">src/data.py</span><span class="fn">_ols_slope()</span></div>
+<pre><code>_X_MONTH   = np.<span class="f">arange</span>(<span class="n">6</span>, dtype=<span class="f">float</span>)
+_X_CENTRED = _X_MONTH - _X_MONTH.<span class="f">mean</span>()
+_X_SS      = <span class="f">float</span>((_X_CENTRED**<span class="n">2</span>).<span class="f">sum</span>())   <span class="c"># 17.5, a constant</span>
+
+<span class="k">def</span> <span class="f">_ols_slope</span>(values):
+    <span class="s">"""Least-squares slope of each row against the chronological month index."""</span>
+    v = np.<span class="f">asarray</span>(values, dtype=<span class="f">float</span>)
+    <span class="k">return</span> (v - v.<span class="f">mean</span>(axis=<span class="n">1</span>, keepdims=<span class="kw">True</span>)) @ _X_CENTRED / _X_SS
+</code></pre>
+
+<p>One vectorised matrix–vector product computes 29,944 regressions. Note it is fed
+<code>PAY_CHRONO</code>, not <code>PAY_COLS</code> — so a positive slope means
+<em>deteriorating</em>.</p>
+
+<h4>The <code>NaN</code> decision, and why it is a feature not a fudge</h4>
+
+<p><code>PAY_RATIO_n</code> divides by the statement balance, which is zero or negative for
+1,930 rows. The convention chosen is <strong><code>np.nan</code>, not a sentinel fill</strong>:</p>
+
+<pre><code>safe_bills = np.<span class="f">where</span>(bills &gt; <span class="n">0</span>, bills, np.nan)   <span class="c"># NaN, not 0 and not -999</span>
+ratios = pays / safe_bills
+</code></pre>
+
+<div class="box why">
+  <div class="bt">Why NaN beats any fill value here</div>
+  <p>XGBoost handles missing values <strong>natively</strong>: at each split it learns a
+  <em>default direction</em> for <code>NaN</code> rows by trying both and keeping whichever
+  scores better (§3.6). So <code>NaN</code> means "the model decides what undefined means, per
+  split, from the data." A fill value of 0 instead asserts "undefined behaves exactly like a
+  client who paid nothing" — which is a <em>claim about credit risk</em> smuggled in as a
+  preprocessing step. <code>NaN</code> carries strictly more information, and the fact that it
+  works at all is a library capability worth describing in the Solution section.</p>
+</div>
+
+<p>Three assertions guard the output — the <code>inf</code> check matters because an unguarded
+division would produce infinities that silently poison the <code>hist</code> binning of §3.4:</p>
+
+<pre><code><span class="k">assert</span> <span class="f">len</span>(added) == <span class="n">17</span>, <span class="s">f"Expected 17 engineered columns, got {len(added)}"</span>
+<span class="k">assert</span> <span class="k">not</span> np.<span class="f">isinf</span>(out[added].<span class="f">to_numpy</span>(dtype=<span class="f">float</span>)).<span class="f">any</span>(), <span class="s">"engineer() emitted inf"</span>
+</code></pre>
+
+<details class="q"><summary>Self-check: why not just one-hot encode <code>PAY_0</code> to handle the non-monotonicity?</summary>
+<div class="dbody">
+<p>You could, and §10 measures it: one-hot reaches
+<strong><span data-v="enc-onehot"></span></strong> against native integers'
+<strong><span data-v="enc-native"></span></strong> — a difference far inside one fold-SD, so the
+two are indistinguishable. But one-hot costs you three things:</p>
+<ul>
+<li>It inflates the feature count from 23 to <strong><span data-v="enc-onehot-n"></span></strong>,
+which dilutes <code>colsample_bytree</code> and slows every fit.</li>
+<li>It <strong>destroys the ordinal information</strong> the tree could otherwise use — a split
+at <code>PAY_0 &lt; 2.5</code> captures "two or more months late" in one node; one-hot needs a
+separate dummy per code.</li>
+<li>It fragments SHAP attribution across 10+ dummy columns, so the <code>PAY_0</code> dependence
+plot — the single most valuable figure in the report — would no longer exist.</li>
+</ul>
+<p>The deeper point: trees do not <em>need</em> the fix, because stacked axis-aligned splits
+already express non-monotone functions. One-hot solves a problem that linear models have.</p>
+</div></details>
+</section>

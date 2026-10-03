@@ -1,0 +1,194 @@
+{
+  "experiment_id": "exp01_ladder",
+  "title": "Complexity ladder: capability against interpretability",
+  "run_utc": "2026-09-30T09:15:03Z",
+  "seed": 42,
+  "versions": {
+    "python": "3.14.3",
+    "numpy": "2.5.3",
+    "sklearn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.52.0",
+    "optuna": "5.0.0",
+    "imblearn": "0.14.2",
+    "pandas": "3.0.6"
+  },
+  "runtime_sec": 104.9,
+  "config": {
+    "prevalence": 0.22116468378209142,
+    "n_rungs": 8,
+    "cv": "RepeatedStratifiedKFold(5x5, random_state=7)"
+  },
+  "rows": [
+    {
+      "label": "rung0_majority",
+      "params": {},
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.5,
+        "roc_auc_sd": 0.0,
+        "pr_auc_mean": 0.2211646837820914,
+        "pr_auc_sd": 0.00010436234606554795,
+        "brier_mean": 0.2211646837820914,
+        "brier_sd": 0.00010436234606554795,
+        "n_fits": 25
+      },
+      "test": null,
+      "model": "Majority class",
+      "interpretability": "total (1 constant)",
+      "interp_cost": 1,
+      "accuracy_at_0.5": 0.7788353162179086,
+      "recall_at_0.5": 0.0
+    },
+    {
+      "label": "rung1_pay0_rule",
+      "params": {},
+      "n_features": 1,
+      "cv": {
+        "roc_auc_mean": 0.6441163422939559,
+        "roc_auc_sd": 0.007500330358570032,
+        "pr_auc_mean": 0.3774433197467961,
+        "pr_auc_sd": 0.010736636596254309,
+        "brier_mean": 0.14598130611184357,
+        "brier_sd": 0.0021063022487115657,
+        "n_fits": 25
+      },
+      "test": null,
+      "model": "PAY_0 only, depth-1 tree",
+      "interpretability": "single rule",
+      "interp_cost": 1,
+      "accuracy_at_0.5": 0.8197453558756,
+      "recall_at_0.5": 0.32918082295205736
+    },
+    {
+      "label": "rung1b_pay0_score",
+      "params": {},
+      "n_features": 1,
+      "cv": {
+        "roc_auc_mean": 0.6909579241957802,
+        "roc_auc_sd": 0.008344809607724086,
+        "pr_auc_mean": 0.43938676314111347,
+        "pr_auc_sd": 0.011373253406578783,
+        "brier_mean": null,
+        "brier_sd": null,
+        "n_fits": 25
+      },
+      "test": null,
+      "model": "PAY_0 as an ordinal score (no model fitted)",
+      "interpretability": "rank on one column",
+      "interp_cost": 1,
+      "accuracy_at_0.5": null,
+      "recall_at_0.5": null
+    },
+    {
+      "label": "rung2_logistic",
+      "params": {},
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7247649232574404,
+        "roc_auc_sd": 0.008632932973005679,
+        "pr_auc_mean": 0.5034368147205243,
+        "pr_auc_sd": 0.013081320280721202,
+        "brier_mean": 0.14477113608568346,
+        "brier_sd": 0.0015848659482802312,
+        "n_fits": 25
+      },
+      "test": null,
+      "model": "Logistic regression (defaults)",
+      "interpretability": "23 coefficients + intercept",
+      "interp_cost": 24,
+      "accuracy_at_0.5": 0.8094343560843248,
+      "recall_at_0.5": 0.23744809362023406
+    },
+    {
+      "label": "rung3_tree",
+      "params": {},
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7541555557103284,
+        "roc_auc_sd": 0.010328318159981751,
+        "pr_auc_mean": 0.5061840065552289,
+        "pr_auc_sd": 0.01369496189471485,
+        "brier_mean": 0.13828344128139286,
+        "brier_sd": 0.0024606195686394023,
+        "n_fits": 25
+      },
+      "test": null,
+      "model": "Decision tree (depth-tuned)",
+      "interpretability": "rule set",
+      "interp_cost": 109,
+      "accuracy_at_0.5": 0.8194948862450427,
+      "recall_at_0.5": 0.3522083805209513
+    },
+    {
+      "label": "rung4_forest",
+      "params": {},
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7641076571488855,
+        "roc_auc_sd": 0.009565034923320085,
+        "pr_auc_mean": 0.5373790755411259,
+        "pr_auc_sd": 0.014841853404007265,
+        "brier_mean": 0.13838773867668544,
+        "brier_sd": 0.002615688448924551,
+        "n_fits": 25
+      },
+      "test": null,
+      "model": "Random forest (defaults)",
+      "interpretability": "not directly available - see SHAP",
+      "interp_cost": 692674,
+      "accuracy_at_0.5": 0.8182842830306826,
+      "recall_at_0.5": 0.3769346923367308
+    },
+    {
+      "label": "rung5_xgb_default",
+      "params": {},
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7618968059309147,
+        "roc_auc_sd": 0.007952445324816216,
+        "pr_auc_mean": 0.529260213502097,
+        "pr_auc_sd": 0.011308077944549938,
+        "brier_mean": 0.1414695507287979,
+        "brier_sd": 0.002573476736049442,
+        "n_fits": 25
+      },
+      "test": null,
+      "model": "XGBoost (library defaults)",
+      "interpretability": "not directly available - see SHAP",
+      "interp_cost": 100,
+      "accuracy_at_0.5": 0.8185347526612399,
+      "recall_at_0.5": 0.37013967534918835
+    },
+    {
+      "label": "rung6_xgb_tuned",
+      "params": {
+        "max_depth": 6,
+        "eta": 0.012532882344401355,
+        "min_child_weight": 4.18989452513114,
+        "subsample": 0.6035831187933652,
+        "colsample_bytree": 0.7998002075958691,
+        "gamma": 0.6950048378620374,
+        "reg_lambda": 34.29466487246623,
+        "reg_alpha": 0.0015165558272858626
+      },
+      "n_features": 23,
+      "cv": {
+        "roc_auc_mean": 0.7845418198217665,
+        "roc_auc_sd": 0.00711929880687044,
+        "pr_auc_mean": 0.5602203741928651,
+        "pr_auc_sd": 0.014612254574967478,
+        "brier_mean": 0.1347932654619217,
+        "brier_sd": 0.004135158657298805,
+        "n_fits": 25
+      },
+      "test": null,
+      "model": "XGBoost (tuned)",
+      "interpretability": "not directly available - see SHAP",
+      "interp_cost": 499,
+      "accuracy_at_0.5": 0.819536631183469,
+      "recall_at_0.5": 0.3380520951302378
+    }
+  ],
+  "notes": "Rung 0 reaches 77.8835% accuracy with zero recall, which is the accuracy trap in one line: the majority-class rate is 1 - prevalence = 77.8835%. Rung 1, a depth-1 tree on PAY_0, reaches only 0.6441 -- short of the 0.690 Phase 1 reported from the notebook that was never committed. The discrepancy is informative rather than an error: a single split binarises PAY_0 into two groups and discards the ordinal gradient, so rung 1b ranks on the raw code with no model at all and reaches 0.6910, recovering the benchmark. The +0.0468 between them is the measured price of insisting on one readable rule, and it is the first rung of the interpretability cost this experiment exists to quantify. Tuned XGBoost reaches 0.7845 +/- 0.0071, a gain of +0.1404 over a single readable rule and +0.0226 over untuned XGBoost. Bagging alone (rung 4) reaches 0.7641, so boosting contributes +0.0204 beyond bagging. Rungs 2 and 3 are untuned internal references, not the group's separately tuned Logistic Regression and Decision Tree submissions. Interpretability cost counts parameters or nodes a human must read to reproduce one decision; for the ensembles it is total node count across all trees, which is why it is reported as 'not directly available - see SHAP'."
+}
