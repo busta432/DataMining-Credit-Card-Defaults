@@ -21,3 +21,6 @@ report/_preview.pdf
 
 # Office lock files
 ~$*
+
+# Report kept local only
+report/
